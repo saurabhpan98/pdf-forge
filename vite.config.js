@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  base: '/img_pdf_app/',
+  base: '/pdf-forge/',
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
