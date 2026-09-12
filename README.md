@@ -38,7 +38,7 @@ A modern, high-performance web application and desktop suite for converting, man
 * **Add watermark** : Adding watermark with rotational ability on each or range of pages
 * **Crop PDF** : 
 * **Edit PDF** :
-* **PDF Forms** :
+* **PDF Forms** : Add form fields or edit in uploaded pdf
 
 ### PDF Security 
 * **Unlock PDF** : Unlock a password protect or encrypted PDF once and for all 
