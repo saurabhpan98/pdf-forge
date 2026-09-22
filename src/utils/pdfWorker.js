@@ -1,4 +1,4 @@
-import { PDFDocument, degrees, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, degrees, rgb, StandardFonts, PDFOperator, PDFNumber } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
 import { createWorker } from 'tesseract.js';
@@ -134,9 +134,6 @@ export async function renderPdfThumbnails(file) {
   return { totalPages: numPages, thumbnails };
 }
 
-/**
- * Render a high-resolution single page of a PDF for the Crop Workspace
- */
 /**
  * Render a high-resolution single page of a PDF for the Workspaces.
  * Added `hideAnnotations` option so existing AcroForm widgets don't get baked
@@ -2016,8 +2013,111 @@ export async function savePdfForms(file, formFields) {
 }
 
 /**
+ * Extract words from a Tesseract.js recognize() result.
+ *
+ * Handles BOTH output shapes:
+ *   • Legacy flat (tesseract.js v4 and earlier, or when requested explicitly):
+ *       data.words[]
+ *   • Modern nested (tesseract.js v5, v6, v7+):
+ *       data.blocks[].paragraphs[].lines[].words[]
+ *
+ * @param {Object} data - The `data` object returned by `worker.recognize()`.
+ * @returns {Array<{ text: string, bbox: {x0:number,y0:number,x1:number,y1:number}, confidence: number }>}
+ */
+function extractTesseractWords(data) {
+  const out = [];
+
+  // Legacy flat output (tesseract.js v4 and earlier)
+  if (Array.isArray(data?.words) && data.words.length > 0) {
+    for (const w of data.words) {
+      if (w && typeof w.text === 'string' && w.text.trim() && w.bbox) {
+        out.push(w);
+      }
+    }
+    if (out.length > 0) return out;
+  }
+
+  // Modern nested output (tesseract.js v5, v6, v7+)
+  if (Array.isArray(data?.blocks)) {
+    for (const block of data.blocks) {
+      const paras = block?.paragraphs;
+      if (!Array.isArray(paras)) continue;
+      for (const para of paras) {
+        const lines = para?.lines;
+        if (!Array.isArray(lines)) continue;
+        for (const line of lines) {
+          const words = line?.words;
+          if (!Array.isArray(words)) continue;
+          for (const w of words) {
+            if (w && typeof w.text === 'string' && w.text.trim() && w.bbox) {
+              out.push(w);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Parse Tesseract's TSV output (level 5 rows = words).
+ *
+ * The TSV format is stable across every tesseract.js version and is used as
+ * a robust fallback whenever `data.blocks` is unavailable or empty for any
+ * reason. Columns:
+ *   level  page_num  block_num  par_num  line_num  word_num  left  top  width  height  conf  text
+ *
+ * @param {string} tsvText
+ * @returns {Array<{ text: string, bbox: {x0:number,y0:number,x1:number,y1:number}, confidence: number }>}
+ */
+function parseTesseractTsv(tsvText) {
+  if (!tsvText || typeof tsvText !== 'string') return [];
+  const lines = tsvText.split('\n');
+  const out = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const cols = line.split('\t');
+    if (cols.length < 12) continue;
+    if (cols[0] !== '5') continue; // level 5 = word
+
+    const left = parseFloat(cols[6]);
+    const top = parseFloat(cols[7]);
+    const width = parseFloat(cols[8]);
+    const height = parseFloat(cols[9]);
+    const confidence = parseFloat(cols[10]);
+    const text = cols[11];
+
+    if (!text || !text.trim()) continue;
+    if (isNaN(left) || isNaN(top) || isNaN(width) || isNaN(height)) continue;
+
+    out.push({
+      text: text.trim(),
+      confidence: isNaN(confidence) ? 0 : confidence,
+      bbox: { x0: left, y0: top, x1: left + width, y1: top + height },
+    });
+  }
+
+  return out;
+}
+
+/**
  * Genuine In-Browser WebAssembly OCR Engine with Granular Real-Time Progress Tracking.
  * Hooked into Tesseract's internal recognition logger for smooth, uninterrupted progress updates.
+ *
+ * The output searchable PDF embeds the rendered page bitmap and stamps a real
+ * hidden text layer over each recognized word. The text is hidden using the
+ * PDF text rendering mode "3" (Tr 3), which is the specification-sanctioned
+ * way to draw invisible text — it is fully searchable, selectable, and
+ * extractable in EVERY PDF viewer (Adobe Acrobat, Preview, PDFium, pdf.js,
+ * and any OCR/DMS pipeline).
+ *
+ * IMPORTANT: tesseract.js v5+ no longer populates data.blocks by default.
+ * We pass `{ blocks: true, tsv: true, text: true }` as the third argument to
+ * worker.recognize() so the detailed word tree (and TSV fallback) is available.
  *
  * @param {File} file - Scanned PDF file
  * @param {Object} options - { language: 'eng', onProgress: Function, outputMode: 'searchable_pdf' | 'text' }
@@ -2048,7 +2148,6 @@ export async function performPdfOcr(file, options = {}) {
   const worker = await createWorker(language, 1, {
     logger: (m) => {
       if (m && m.status === 'recognizing text' && typeof m.progress === 'number') {
-        // Calculate dynamic sub-page percentage
         const pagePortion = 90 / totalPages;
         const basePagePercent = 5 + (currentPageNum - 1) * pagePortion;
         const currentSubPercent = Math.round(basePagePercent + m.progress * pagePortion);
@@ -2070,6 +2169,12 @@ export async function performPdfOcr(file, options = {}) {
   const helveticaFont = await outputPdfDoc.embedFont(StandardFonts.Helvetica);
   let extractedFullText = '';
 
+  // Pre-build the "Set text rendering mode to invisible" (Tr 3) operators.
+  // Tr is a text-state operator that lives in the PDF graphics state and can
+  // legally appear outside BT/ET blocks. It persists until changed.
+  const setTextRenderingInvisible = PDFOperator.of('Tr', [PDFNumber.of(3)]);
+  const setTextRenderingVisible = PDFOperator.of('Tr', [PDFNumber.of(0)]);
+
   try {
     for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
       currentPageNum = pageNum;
@@ -2089,8 +2194,18 @@ export async function performPdfOcr(file, options = {}) {
 
       await page.render({ canvasContext: ctx, viewport }).promise;
 
-      // Real-time recognition runs here; logger will stream granular progress updates automatically
-      const { data } = await worker.recognize(canvas);
+      // ------------------------------------------------------------------
+      // CRITICAL: tesseract.js v5+ only generates `blocks` / `tsv` when
+      // they are explicitly requested via the third argument to recognize().
+      // Without this, `data.blocks` and `data.words` are both undefined and
+      // no text layer can be built.
+      // ------------------------------------------------------------------
+      const { data } = await worker.recognize(canvas, {}, {
+        text: true,
+        blocks: true,
+        tsv: true,
+      });
+
       extractedFullText += `--- Page ${pageNum} ---\n` + (data.text || '') + '\n\n';
 
       if (outputMode === 'searchable_pdf') {
@@ -2109,35 +2224,59 @@ export async function performPdfOcr(file, options = {}) {
           height: pdfPageH,
         });
 
-        // Stamp selectable text layer over coordinates
-        if (data.words && data.words.length > 0) {
+        // Try nested blocks tree first; fall back to parsing the TSV output.
+        let tesseractWords = extractTesseractWords(data);
+        let source = 'blocks';
+        if (tesseractWords.length === 0 && data.tsv) {
+          tesseractWords = parseTesseractTsv(data.tsv);
+          source = 'tsv';
+        }
+
+        console.log(
+          `[OCR] Page ${pageNum}: ${tesseractWords.length} words extracted (source=${source}, ` +
+          `hasBlocks=${Array.isArray(data.blocks)}, hasWords=${Array.isArray(data.words)}, ` +
+          `hasTsv=${typeof data.tsv === 'string'})`
+        );
+
+        if (tesseractWords.length > 0) {
           const scaleX = pdfPageW / canvas.width;
           const scaleY = pdfPageH / canvas.height;
 
-          for (const w of data.words) {
+          // Switch to invisible text rendering mode for the whole text layer.
+          newPage.pushOperators(setTextRenderingInvisible);
+
+          for (const w of tesseractWords) {
             const wordText = (w.text || '').trim();
             if (!wordText) continue;
 
             const bbox = w.bbox;
+            if (!bbox) continue;
+
             const wordX = bbox.x0 * scaleX;
-            const wordWidth = Math.max(4, (bbox.x1 - bbox.x0) * scaleX);
             const wordHeight = Math.max(6, (bbox.y1 - bbox.y0) * scaleY);
+            // PDF origin is bottom-left; canvas origin is top-left.
             const wordY = pdfPageH - (bbox.y1 * scaleY);
+
+            // Font size derived from glyph bbox height. No `maxWidth` — pdf-lib
+            // would otherwise shrink text and produce unselectable sub-pixel
+            // glyphs in some viewers.
+            const estimatedFontSize = Math.max(5, Math.min(wordHeight * 0.9, 36));
 
             try {
               newPage.drawText(wordText, {
                 x: wordX,
                 y: wordY,
-                size: Math.max(5, Math.min(wordHeight * 0.9, 36)),
+                size: estimatedFontSize,
                 font: helveticaFont,
                 color: rgb(0, 0, 0),
-                opacity: 0,
-                maxWidth: wordWidth + 4
               });
             } catch (_) {
               // Ignore unsupported character glyph exceptions safely
             }
           }
+
+          // Restore normal rendering mode for anything drawn afterwards.
+          newPage.pushOperators(setTextRenderingVisible);
         }
       }
     }

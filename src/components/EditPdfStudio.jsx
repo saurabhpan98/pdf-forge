@@ -189,16 +189,103 @@ function canvasXYToPdf(cx, cy, transform, pageView) {
 }
 
 const _baselineCache = {};
+
+/**
+ * Compute the vertical offset from the top of a line box to the text baseline.
+ *
+ * The browser's line-layout algorithm uses the font's hhea / OS-2 ascent and
+ * descent metrics, which frequently differ from the canvas `fontBoundingBox*`
+ * metrics returned by `measureText()` — most visibly for subsetted PDF fonts
+ * where the ink bounding-box descent is much larger than the typographic
+ * descent. Using canvas metrics alone therefore produces a `baseFromTop`
+ * value that is a couple of pixels too small, which made overlay text land
+ * slightly BELOW the underlying raster text (visible as a mismatch between
+ * the selection highlight and the glyphs, and as a downward shift when an
+ * edit was committed).
+ *
+ * Fix: measure the baseline directly using the browser's own text layout.
+ *
+ *   • Build a hidden probe <div> with the exact same font-family, font-size
+ *     and line-height that the overlay uses.
+ *   • Put a text node inside it, then append an EMPTY inline-block <span>.
+ *     Per CSS 2.1, an inline-block with no in-flow content has its baseline
+ *     at its bottom margin edge — so the span's bottom lands exactly on the
+ *     line box baseline.
+ *   • The vertical distance from the probe's top to that bottom edge is the
+ *     value we want.
+ *
+ * Results are cached per (fontFamily, fontSize, lineHeight), so each unique
+ * combination is measured exactly once per session.
+ */
 function getBaselineFromTop(cssFont, fontPx, lineHeightPx) {
   const key = `${cssFont}|${fontPx.toFixed(2)}|${lineHeightPx.toFixed(2)}`;
   if (_baselineCache[key] !== undefined) return _baselineCache[key];
+
+  // -------------------------------------------------------------------------
+  // Preferred: measure using the browser's real text layout.
+  // -------------------------------------------------------------------------
+  if (typeof document !== 'undefined' && document.body) {
+    let probe = null;
+    try {
+      probe = document.createElement('div');
+      probe.style.cssText = [
+        'position:absolute',
+        'left:-99999px',
+        'top:0',
+        'margin:0',
+        'padding:0',
+        'border:0',
+        'outline:0',
+        'box-sizing:content-box',
+        'visibility:hidden',
+        'pointer-events:none',
+        'white-space:pre',
+        `font-family:${cssFont}`,
+        `font-size:${fontPx}px`,
+        `line-height:${lineHeightPx}px`,
+      ].join(';');
+      probe.textContent = 'M';
+
+      // Empty inline-block → its bottom margin edge sits on the baseline.
+      const marker = document.createElement('span');
+      marker.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline;margin:0;padding:0;border:0;';
+      probe.appendChild(marker);
+
+      document.body.appendChild(probe);
+
+      const probeTop = probe.getBoundingClientRect().top;
+      const markerBottom = marker.getBoundingClientRect().bottom;
+      const measured = markerBottom - probeTop;
+
+      // Sanity: baseline must lie strictly inside the line box and be plausible
+      // for the given font size.
+      if (
+        typeof measured === 'number' &&
+        measured > fontPx * 0.4 &&
+        measured < lineHeightPx + fontPx * 0.5
+      ) {
+        _baselineCache[key] = measured;
+        return measured;
+      }
+    } catch (_) {
+      // Fall through to canvas-based measurement.
+    } finally {
+      if (probe && probe.parentNode) probe.parentNode.removeChild(probe);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Fallback: canvas TextMetrics (used only if the DOM measurement fails).
+  // -------------------------------------------------------------------------
   try {
     const ctx = document.createElement('canvas').getContext('2d');
     ctx.font = `${fontPx}px ${cssFont}`;
-    const m = ctx.measureText('Hgjy|');
+    const m = ctx.measureText('Mg|');
     const asc = m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent ?? fontPx * 0.75;
     const desc = m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent ?? fontPx * 0.25;
-    return (_baselineCache[key] = (lineHeightPx - (asc + desc)) / 2 + asc);
+    const result = (lineHeightPx + asc - desc) / 2;
+    _baselineCache[key] = result;
+    return result;
   } catch {
     return (_baselineCache[key] = lineHeightPx / 2 + fontPx * 0.3);
   }
