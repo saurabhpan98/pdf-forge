@@ -1,46 +1,40 @@
-import { PDFDocument, degrees, rgb, StandardFonts, PDFOperator, PDFNumber } from 'pdf-lib';
+import { PDFDocument, degrees, rgb, StandardFonts, PDFOperator, PDFNumber, PDFName, PDFString } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
 import { createWorker } from 'tesseract.js';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
-// Configure pdfjs worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 
 /**
  * Accurately check if a PDF is password-protected or encrypted.
- * Returns true ONLY if the document cannot be read without a password.
  */
 export async function checkPdfPassword(file) {
   try {
     const arrayBuffer = await file.arrayBuffer();
-    
-    // 1. Primary check via PDF.js (Catches PasswordException accurately)
+
     try {
       const loadingTask = pdfjsLib.getDocument({
         data: new Uint8Array(arrayBuffer.slice(0)),
         stopAtErrors: false
       });
-      
-      // Attempt to load the document outline / first page
       const doc = await loadingTask.promise;
       await doc.getPage(1);
-      return false; // Document parsed and rendered cleanly without password
+      return false;
     } catch (pdfErr) {
       if (
         pdfErr.name === 'PasswordException' ||
         pdfErr.message?.toLowerCase().includes('password') ||
         pdfErr.code === 1
       ) {
-        return true; // Document is strictly encrypted with a password
+        return true;
       }
     }
 
-    // 2. Secondary check via pdf-lib
     try {
       await PDFDocument.load(arrayBuffer, { ignoreEncryption: false });
-      return false; // No encryption active
+      return false;
     } catch (err) {
       const msg = err.message?.toLowerCase() || '';
       if (msg.includes('encrypt') || msg.includes('password') || msg.includes('protected')) {
@@ -54,11 +48,6 @@ export async function checkPdfPassword(file) {
   }
 }
 
-/**
- * Genuine PDF compression using the backend Ghostscript optimization engine.
- * @param {File} file - Original PDF file
- * @param {number} compressionLevel - Target reduction slider (10 to 90)
- */
 export async function compressPDF(file, compressionLevel = 45) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -71,7 +60,6 @@ export async function compressPDF(file, compressionLevel = 45) {
   formData.append('file', file);
   formData.append('compressionPercent', compressionLevel.toString());
 
-  //const response = await fetch('/api/compress-pdf', {
   const response = await fetch(`${API_BASE_URL}/api/compress-pdf`, {
     method: 'POST',
     body: formData,
@@ -97,9 +85,6 @@ export async function compressPDF(file, compressionLevel = 45) {
   };
 }
 
-/**
- * Render all page thumbnails of a PDF file into base64 image data URLs.
- */
 export async function renderPdfThumbnails(file) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -134,11 +119,6 @@ export async function renderPdfThumbnails(file) {
   return { totalPages: numPages, thumbnails };
 }
 
-/**
- * Render a high-resolution single page of a PDF for the Workspaces.
- * Added `hideAnnotations` option so existing AcroForm widgets don't get baked
- * into the background image when manipulating PDF forms.
- */
 export async function renderSinglePdfPage(file, pageNum = 1, scale = 1.6, hideAnnotations = false) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -159,11 +139,9 @@ export async function renderSinglePdfPage(file, pageNum = 1, scale = 1.6, hideAn
   canvas.height = viewport.height;
   canvas.width = viewport.width;
 
-  // Render context options
   const renderContext = {
     canvasContext: ctx,
     viewport,
-    // When true, suppresses baking embedded AcroForm text/borders directly into the canvas
     annotationMode: hideAnnotations ? pdfjsLib.AnnotationMode.DISABLE : pdfjsLib.AnnotationMode.ENABLE,
   };
 
@@ -177,9 +155,6 @@ export async function renderSinglePdfPage(file, pageNum = 1, scale = 1.6, hideAn
   };
 }
 
-/**
- * Reorganize PDF: Apply reordering and page rotations
- */
 export async function reorganizePDF(file, pageItems) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -215,9 +190,6 @@ export async function reorganizePDF(file, pageItems) {
   };
 }
 
-/**
- * Extract specific page indices (1-based) into a new PDF.
- */
 export async function extractPagesFromPDF(file, pagesToExtractSet) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -250,9 +222,6 @@ export async function extractPagesFromPDF(file, pagesToExtractSet) {
   };
 }
 
-/**
- * Remove specific page indices (1-based) from a PDF.
- */
 export async function removePagesFromPDF(file, pagesToRemoveSet) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -289,9 +258,6 @@ export async function removePagesFromPDF(file, pagesToRemoveSet) {
   };
 }
 
-/**
- * Helper to safely load a PDFDocument using pdf-lib.
- */
 async function loadPdfSafely(file) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -304,9 +270,6 @@ async function loadPdfSafely(file) {
   return await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
 }
 
-/**
- * Helper to safely load a document using pdfjs-dist.
- */
 async function loadPdfJsSafely(file) {
   const arrayBuffer = await file.arrayBuffer();
   try {
@@ -322,9 +285,6 @@ async function loadPdfJsSafely(file) {
   }
 }
 
-/**
- * Merge multiple PDF files.
- */
 export async function mergePDFs(fileList) {
   const lockedFiles = [];
 
@@ -357,9 +317,6 @@ export async function mergePDFs(fileList) {
   };
 }
 
-/**
- * Split PDF: Extract each page into separate PDFs inside a ZIP.
- */
 export async function splitPDF(file) {
   const pdfDoc = await loadPdfSafely(file);
   const totalPages = pdfDoc.getPageCount();
@@ -380,25 +337,18 @@ export async function splitPDF(file) {
   };
 }
 
-/**
- * Convert an ordered list of Image files into PDF with layout options.
- * @param {Array} imageItems - Array of image objects { file, rotation }
- * @param {Object} options - Orientation, Page size, Margin & Merge settings
- */
 export async function imagesToPDF(imageItems, options = {}) {
   const {
-    orientation = 'portrait', // 'portrait' | 'landscape'
-    pageSize = 'a4', // 'fit' | 'a4' | 'letter'
-    margin = 'none', // 'none' | 'small' | 'big'
+    orientation = 'portrait',
+    pageSize = 'a4',
+    margin = 'none',
     mergeAll = true,
   } = options;
 
-  // Margin in points
   let marginPt = 0;
   if (margin === 'small') marginPt = 18;
   if (margin === 'big') marginPt = 36;
 
-  // Standard dimensions in points (72 DPI)
   const PAGE_SIZES = {
     a4: { width: 595.28, height: 841.89 },
     letter: { width: 612.0, height: 792.0 },
@@ -444,7 +394,6 @@ export async function imagesToPDF(imageItems, options = {}) {
       page.setRotation(degrees(customRotation));
     }
 
-    // Fit image inside available printable bounding box
     const availableWidth = pageWidth - marginPt * 2;
     const availableHeight = pageHeight - marginPt * 2;
     const scale = Math.min(
@@ -468,7 +417,6 @@ export async function imagesToPDF(imageItems, options = {}) {
     return doc;
   };
 
-  // If not merging into one PDF, build a ZIP of individual PDFs
   if (!mergeAll && imageItems.length > 1) {
     const zip = new JSZip();
     for (let idx = 0; idx < imageItems.length; idx++) {
@@ -487,7 +435,6 @@ export async function imagesToPDF(imageItems, options = {}) {
     };
   }
 
-  // Unified single PDF document
   const pdfDoc = await PDFDocument.create();
 
   for (const item of imageItems) {
@@ -558,9 +505,6 @@ export async function imagesToPDF(imageItems, options = {}) {
   };
 }
 
-/**
- * Convert PDF pages to JPG image files.
- */
 export async function pdfToJpg(file) {
   const pdf = await loadPdfJsSafely(file);
   const numPages = pdf.numPages;
@@ -604,9 +548,6 @@ export async function pdfToJpg(file) {
   };
 }
 
-/**
- * Extract plain text, format tables, indentation, and headings into Markdown.
- */
 export async function pdfToMarkdown(file) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -615,12 +556,10 @@ export async function pdfToMarkdown(file) {
     throw err;
   }
 
-  // 1. Primary: Server-side PyMuPDF Table & Heading Engine
   try {
     const formData = new FormData();
     formData.append('file', file);
 
-    //const response = await fetch('/api/convert/pdf-to-markdown', {
     const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-markdown`, {
       method: 'POST',
       body: formData,
@@ -640,15 +579,13 @@ export async function pdfToMarkdown(file) {
     console.warn('Backend Markdown conversion error, using fallback:', err);
   }
 
-  // 2. Secondary Fallback: In-browser structured line-grouped extraction
   const pdf = await loadPdfJsSafely(file);
   let markdown = `# ${file.name.replace(/\.[^/.]+$/, '')}\n\n`;
 
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
-    
-    // Group items by vertical baseline
+
     const lineMap = new Map();
     for (const item of textContent.items) {
       if (!item.str) continue;
@@ -673,18 +610,11 @@ export async function pdfToMarkdown(file) {
   };
 }
 
-/**
- * Check if a Word (.docx / .doc) file is password-protected or encrypted.
- * @param {File} file - Word file object
- * @returns {Promise<boolean>}
- */
 export async function checkDocxPassword(file) {
   try {
     const arrayBuffer = await file.arrayBuffer();
     const bytes = new Uint8Array(arrayBuffer);
 
-    // 1. Check for legacy OLE Compound Document signature (D0 CF 11 E0 A1 B1 1A E1)
-    // Encrypted modern .docx files (Office OpenXML Agile Encryption) are wrapped in OLE packages
     const isOleContainer =
       bytes[0] === 0xd0 &&
       bytes[1] === 0xcf &&
@@ -696,7 +626,6 @@ export async function checkDocxPassword(file) {
       bytes[7] === 0xe1;
 
     if (isOleContainer) {
-      // Decode partial string header to check for standard encryption streams
       const headerText = new TextDecoder('latin1').decode(bytes.slice(0, 4096));
       if (
         headerText.includes('EncryptedPackage') ||
@@ -707,11 +636,9 @@ export async function checkDocxPassword(file) {
       }
     }
 
-    // 2. Inspect ZIP-based OpenXML container using JSZip
     try {
       const zip = await JSZip.loadAsync(arrayBuffer);
 
-      // Check for Document Protection elements in settings.xml
       const settingsFile = zip.file('word/settings.xml');
       if (settingsFile) {
         const settingsXml = await settingsFile.async('text');
@@ -725,7 +652,6 @@ export async function checkDocxPassword(file) {
         }
       }
     } catch {
-      // If JSZip fails to read a modern .docx container, it is either corrupt or fully encrypted
       if (file.name.toLowerCase().endsWith('.docx')) {
         return true;
       }
@@ -737,10 +663,6 @@ export async function checkDocxPassword(file) {
   }
 }
 
-/**
- * Convert DOCX / DOC to PDF using the LibreOffice backend service.
- * @param {File} file - Word document file
- */
 export async function convertWordToPDF(file) {
   const isLocked = await checkDocxPassword(file);
   if (isLocked) {
@@ -752,7 +674,6 @@ export async function convertWordToPDF(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/word-to-pdf', {
   const response = await fetch(`${API_BASE_URL}/api/convert/word-to-pdf`, {
     method: 'POST',
     body: formData,
@@ -779,17 +700,11 @@ export async function convertWordToPDF(file) {
   };
 }
 
-/**
- * Check if a PowerPoint (.pptx / .ppt) file is password-protected or encrypted.
- * @param {File} file - Presentation file object
- * @returns {Promise<boolean>}
- */
 export async function checkPptxPassword(file) {
   try {
     const arrayBuffer = await file.arrayBuffer();
     const bytes = new Uint8Array(arrayBuffer);
 
-    // 1. Check for legacy OLE Compound Document signature (Encrypted modern .pptx files are wrapped in OLE packages)
     const isOleContainer =
       bytes[0] === 0xd0 &&
       bytes[1] === 0xcf &&
@@ -811,11 +726,9 @@ export async function checkPptxPassword(file) {
       }
     }
 
-    // 2. Inspect ZIP-based OpenXML container using JSZip
     try {
       const zip = await JSZip.loadAsync(arrayBuffer);
 
-      // Check presentation-level protection settings
       const presPropsFile = zip.file('ppt/presProps.xml');
       if (presPropsFile) {
         const presPropsXml = await presPropsFile.async('text');
@@ -828,7 +741,6 @@ export async function checkPptxPassword(file) {
         }
       }
     } catch {
-      // If JSZip fails to read a modern .pptx container, it is either corrupt or password-protected
       if (file.name.toLowerCase().endsWith('.pptx')) {
         return true;
       }
@@ -840,10 +752,6 @@ export async function checkPptxPassword(file) {
   }
 }
 
-/**
- * Convert PPTX / PPT to PDF using the LibreOffice backend service.
- * @param {File} file - Presentation document file
- */
 export async function convertPowerpointToPDF(file) {
   const isLocked = await checkPptxPassword(file);
   if (isLocked) {
@@ -855,7 +763,6 @@ export async function convertPowerpointToPDF(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/powerpoint-to-pdf', {
   const response = await fetch(`${API_BASE_URL}/api/convert/powerpoint-to-pdf`, {
     method: 'POST',
     body: formData,
@@ -882,15 +789,10 @@ export async function convertPowerpointToPDF(file) {
   };
 }
 
-/**
- * Convert HTML file or HTML string to PDF using LibreOffice.
- * @param {File|string} input - HTML File object or raw HTML string
- */
 export async function convertHtmlToPDF(input) {
   let response;
 
   if (typeof input === 'string') {
-    //response = await fetch('/api/convert/html-to-pdf', {
     response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -901,7 +803,6 @@ export async function convertHtmlToPDF(input) {
     formData.append('file', input);
 
     response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
-    //response = await fetch(`${API_BASE_URL}/api/convert/html-to-pdf`, {
       method: 'POST',
       body: formData,
     });
@@ -923,17 +824,11 @@ export async function convertHtmlToPDF(input) {
   };
 }
 
-/**
- * Check if an Excel (.xlsx / .xls) file is password-protected or encrypted.
- * @param {File} file - Excel file object
- * @returns {Promise<boolean>}
- */
 export async function checkExcelPassword(file) {
   try {
     const arrayBuffer = await file.arrayBuffer();
     const bytes = new Uint8Array(arrayBuffer);
 
-    // 1. Check for legacy OLE Compound Document signature (Encrypted modern .xlsx files are wrapped in OLE packages)
     const isOleContainer =
       bytes[0] === 0xd0 &&
       bytes[1] === 0xcf &&
@@ -955,11 +850,9 @@ export async function checkExcelPassword(file) {
       }
     }
 
-    // 2. Inspect ZIP-based OpenXML container using JSZip
     try {
       const zip = await JSZip.loadAsync(arrayBuffer);
 
-      // Check workbook-level protection in xl/workbook.xml
       const workbookFile = zip.file('xl/workbook.xml');
       if (workbookFile) {
         const wbXml = await workbookFile.async('text');
@@ -968,7 +861,6 @@ export async function checkExcelPassword(file) {
         }
       }
     } catch {
-      // If JSZip fails to parse a modern .xlsx container, it is either corrupt or password-protected
       if (file.name.toLowerCase().endsWith('.xlsx')) {
         return true;
       }
@@ -980,10 +872,6 @@ export async function checkExcelPassword(file) {
   }
 }
 
-/**
- * Convert XLSX / XLS to PDF using the LibreOffice backend service.
- * @param {File} file - Excel spreadsheet file
- */
 export async function convertExcelToPDF(file) {
   const isLocked = await checkExcelPassword(file);
   if (isLocked) {
@@ -995,7 +883,6 @@ export async function convertExcelToPDF(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/excel-to-pdf', {
   const response = await fetch(`${API_BASE_URL}/api/convert/excel-to-pdf`, {
     method: 'POST',
     body: formData,
@@ -1022,12 +909,6 @@ export async function convertExcelToPDF(file) {
   };
 }
 
-/**
- * Rotate PDF pages.
- * Supports both a single global angle or an array of page items with custom rotation per page.
- * @param {File} file - PDF file
- * @param {number|Array} options - Global rotation angle (e.g. 90) OR Array of page items [{ pageNumber, rotation }]
- */
 export async function rotatePDF(file, options = 90) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -1041,7 +922,6 @@ export async function rotatePDF(file, options = 90) {
   const pages = pdfDoc.getPages();
 
   if (Array.isArray(options)) {
-    // Apply per-page custom rotation
     options.forEach((item, index) => {
       if (pages[index] && item.rotation !== 0) {
         const currentRotation = pages[index].getRotation().angle;
@@ -1049,7 +929,6 @@ export async function rotatePDF(file, options = 90) {
       }
     });
   } else {
-    // Apply global uniform angle across all pages
     const angle = typeof options === 'number' ? options : 90;
     pages.forEach((page) => {
       const currentRotation = page.getRotation().angle;
@@ -1064,10 +943,6 @@ export async function rotatePDF(file, options = 90) {
   };
 }
 
-/**
- * Convert PDF to editable Word document (.docx) using the backend service.
- * @param {File} file - PDF document file
- */
 export async function convertPdfToWord(file) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -1079,7 +954,6 @@ export async function convertPdfToWord(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/pdf-to-word', {
   const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-word`, {
     method: 'POST',
     body: formData,
@@ -1101,10 +975,6 @@ export async function convertPdfToWord(file) {
   };
 }
 
-/**
- * Convert PDF to PowerPoint presentation (.pptx) using the backend service.
- * @param {File} file - PDF document file
- */
 export async function convertPdfToPowerpoint(file) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -1115,9 +985,8 @@ export async function convertPdfToPowerpoint(file) {
 
   const formData = new FormData();
   formData.append('file', file);
-  
+
   const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-powerpoint`, {
-  //const response = await fetch('/api/convert/pdf-to-powerpoint', {
     method: 'POST',
     body: formData,
   });
@@ -1138,10 +1007,6 @@ export async function convertPdfToPowerpoint(file) {
   };
 }
 
-/**
- * Convert PDF to Excel spreadsheet (.xlsx) using the backend service.
- * @param {File} file - PDF document file
- */
 export async function convertPdfToExcel(file) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -1153,7 +1018,6 @@ export async function convertPdfToExcel(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  //const response = await fetch('/api/convert/pdf-to-excel', {
   const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-excel`, {
     method: 'POST',
     body: formData,
@@ -1175,11 +1039,6 @@ export async function convertPdfToExcel(file) {
   };
 }
 
-/**
- * Add customizable page numbers to a PDF document.
- * @param {File} file - Source PDF file
- * @param {Object} options - Numbering layout options
- */
 export async function addPageNumbersToPDF(file, options) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -1209,7 +1068,6 @@ export async function addPageNumbersToPDF(file, options) {
   const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const totalPages = pdfDoc.getPageCount();
 
-  // Load standard font styles
   let fontRef;
   if (fontFamily === 'Times') {
     if (isBold && isItalic) fontRef = await pdfDoc.embedFont(StandardFonts.TimesRomanBoldItalic);
@@ -1228,12 +1086,10 @@ export async function addPageNumbersToPDF(file, options) {
     else fontRef = await pdfDoc.embedFont(StandardFonts.Helvetica);
   }
 
-  // Margin in points (72 points = 1 inch)
-  let marginPt = 36; // recommended (~0.5 in)
+  let marginPt = 36;
   if (margin === 'small') marginPt = 20;
   if (margin === 'large') marginPt = 54;
 
-  // Parse RGB
   const hex = color.replace('#', '');
   const r = parseInt(hex.substring(0, 2), 16) / 255 || 0.2;
   const g = parseInt(hex.substring(2, 4), 16) / 255 || 0.2;
@@ -1248,7 +1104,6 @@ export async function addPageNumbersToPDF(file, options) {
     const { width, height } = page.getSize();
     const currentNumber = firstNumber + (i - (startPage - 1));
 
-    // Construct text string
     let label = `${currentNumber}`;
     if (textPreset === 'page-n') {
       label = `Page ${currentNumber}`;
@@ -1263,7 +1118,6 @@ export async function addPageNumbersToPDF(file, options) {
     const textWidth = fontRef.widthOfTextAtSize(label, fontSize);
     const textHeight = fontRef.heightAtSize(fontSize);
 
-    // Resolve active horizontal / vertical alignments
     let activePos = position;
     if (pageMode === 'facing') {
       const isEven = (i + 1) % 2 === 0;
@@ -1277,7 +1131,6 @@ export async function addPageNumbersToPDF(file, options) {
     let x = marginPt;
     let y = marginPt;
 
-    // Horizontal coordinates
     if (activePos.includes('left')) {
       x = marginPt;
     } else if (activePos.includes('center')) {
@@ -1286,7 +1139,6 @@ export async function addPageNumbersToPDF(file, options) {
       x = width - marginPt - textWidth;
     }
 
-    // Vertical coordinates
     if (activePos.startsWith('top')) {
       y = height - marginPt - textHeight;
     } else if (activePos.startsWith('middle')) {
@@ -1322,12 +1174,6 @@ export async function addPageNumbersToPDF(file, options) {
   };
 }
 
-
-/**
- * Add text or image watermark to a PDF.
- * @param {File} file - Target PDF file
- * @param {Object} options - Watermark settings
- */
 export async function addWatermarkToPDF(file, options) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -1337,7 +1183,7 @@ export async function addWatermarkToPDF(file, options) {
   }
 
   const {
-    type = 'text', // 'text' | 'image'
+    type = 'text',
     text = 'CONFIDENTIAL',
     imageFile = null,
     position = 'middle-center',
@@ -1346,7 +1192,7 @@ export async function addWatermarkToPDF(file, options) {
     rotation = 45,
     fromPage = 1,
     toPage = 1,
-    layer = 'over', // 'over' | 'below'
+    layer = 'over',
     fontFamily = 'Helvetica',
     fontSize = 36,
     isBold = false,
@@ -1359,7 +1205,6 @@ export async function addWatermarkToPDF(file, options) {
   const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
   const totalPages = pdfDoc.getPageCount();
 
-  // 1. Embed Font (if text watermark)
   let fontRef;
   if (type === 'text') {
     if (fontFamily === 'Times') {
@@ -1380,7 +1225,6 @@ export async function addWatermarkToPDF(file, options) {
     }
   }
 
-  // 2. Embed Image (if image watermark)
   let embeddedImg = null;
   if (type === 'image' && imageFile) {
     const imgBuffer = await imageFile.arrayBuffer();
@@ -1391,7 +1235,6 @@ export async function addWatermarkToPDF(file, options) {
     }
   }
 
-  // Parse Color
   const hex = color.replace('#', '');
   const r = parseInt(hex.substring(0, 2), 16) / 255 || 0.88;
   const g = parseInt(hex.substring(2, 4), 16) / 255 || 0.11;
@@ -1411,7 +1254,6 @@ export async function addWatermarkToPDF(file, options) {
         const textHeight = fontRef.heightAtSize(fontSize);
         const rad = (rotation * Math.PI) / 180;
 
-        // Offset center to align rotation around text middle
         const drawX = cx - (textWidth / 2) * Math.cos(rad) + (textHeight / 2) * Math.sin(rad);
         const drawY = cy - (textWidth / 2) * Math.sin(rad) - (textHeight / 2) * Math.cos(rad);
 
@@ -1455,7 +1297,6 @@ export async function addWatermarkToPDF(file, options) {
     };
 
     if (isMosaic) {
-      // 3x3 Tile Grid across page
       const cols = 3;
       const rows = 3;
       for (let c = 0; c < cols; c++) {
@@ -1466,7 +1307,6 @@ export async function addWatermarkToPDF(file, options) {
         }
       }
     } else {
-      // Position Matrix Coordinates
       let cx = width / 2;
       let cy = height / 2;
 
@@ -1489,9 +1329,6 @@ export async function addWatermarkToPDF(file, options) {
   };
 }
 
-/**
- * Crop PDF pages using visual rectangle bounds (x, y, width, height in % 0..100)
- */
 export async function cropPDF(file, cropOptions) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -1501,10 +1338,10 @@ export async function cropPDF(file, cropOptions) {
   }
 
   const {
-    pagesMode = 'custom', // 'custom' | 'all' | 'current'
+    pagesMode = 'custom',
     currentPage = 1,
     box = { x: 5, y: 5, width: 90, height: 90 },
-    pageBoxes = {} // Mapping of { [pageNumber]: { x, y, width, height } }
+    pageBoxes = {}
   } = cropOptions;
 
   const arrayBuffer = await file.arrayBuffer();
@@ -1523,12 +1360,10 @@ export async function cropPDF(file, cropOptions) {
   };
 
   if (pagesMode === 'current') {
-    // Only crop the active page
     const targetIdx = Math.max(0, Math.min(currentPage - 1, totalPages - 1));
     const targetBox = pageBoxes[currentPage] || box;
     applyCropToPage(pdfDoc.getPage(targetIdx), targetBox);
   } else if (pagesMode === 'custom') {
-    // Only crop pages that have been explicitly modified in pageBoxes
     const pages = pdfDoc.getPages();
     pages.forEach((page, idx) => {
       const pageNum = idx + 1;
@@ -1537,7 +1372,6 @@ export async function cropPDF(file, cropOptions) {
       }
     });
   } else {
-    // 'all' mode: apply the same uniform box to all pages
     const pages = pdfDoc.getPages();
     pages.forEach((page) => {
       applyCropToPage(page, box);
@@ -1553,9 +1387,6 @@ export async function cropPDF(file, cropOptions) {
   };
 }
 
-/**
- * Protect PDF with password
- */
 export async function protectPDF(file, password) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -1568,7 +1399,6 @@ export async function protectPDF(file, password) {
   formData.append('file', file);
   formData.append('password', password);
 
-  //const response = await fetch('/api/protect-pdf', {
   const response = await fetch(`${API_BASE_URL}/api/protect-pdf`, {
     method: 'POST',
     body: formData,
@@ -1589,9 +1419,6 @@ export async function protectPDF(file, password) {
   };
 }
 
-/**
- * Unlock / Decrypt PDF with dual options (with password or automatic restriction removal)
- */
 export async function unlockPDF(file, options = {}) {
   const { mode = 'with-password', password = '' } = options;
 
@@ -1602,7 +1429,6 @@ export async function unlockPDF(file, options = {}) {
     formData.append('password', password);
   }
 
-  //const response = await fetch('/api/unlock-pdf', {
   const response = await fetch(`${API_BASE_URL}/api/unlock-pdf`, {
     method: 'POST',
     body: formData,
@@ -1623,11 +1449,6 @@ export async function unlockPDF(file, options = {}) {
   };
 }
 
-/**
- * Advanced AcroForm & Widget Field Parser
- * Safely extracts existing form fields and maps their coordinates to normalized percentage values
- * so they can be selected, edited, typed into, and deleted exactly like manually added fields.
- */
 export async function extractPdfFormFields(file) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -1653,8 +1474,7 @@ export async function extractPdfFormFields(file) {
 
         widgets.forEach((widget, wIdx) => {
           const rect = widget.getRectangle();
-          
-          // Resolve Page index for the widget
+
           const pRef = widget.P();
           let pageIndex = 0;
           if (pRef) {
@@ -1665,7 +1485,6 @@ export async function extractPdfFormFields(file) {
           const targetPage = pages[pageIndex] || pages[0];
           const { width: pWidth, height: pHeight } = targetPage.getSize();
 
-          // Convert PDF points (origin bottom-left) to Normalized DOM Percentages (origin top-left)
           const widthPercent = Math.max(2, (rect.width / pWidth) * 100);
           const heightPercent = Math.max(1.5, (rect.height / pHeight) * 100);
           const xPercent = Math.max(0, Math.min(100 - widthPercent, (rect.x / pWidth) * 100));
@@ -1680,13 +1499,13 @@ export async function extractPdfFormFields(file) {
             try { value = field.isChecked(); } catch { value = false; }
           } else if (type.includes('Radio')) {
             fieldType = 'radio';
-            try { 
-              value = field.getSelected() || ''; 
-              options = field.getOptions() || []; 
+            try {
+              value = field.getSelected() || '';
+              options = field.getOptions() || [];
             } catch { value = ''; }
           } else if (type.includes('Dropdown') || type.includes('OptionList') || type.includes('Choice')) {
             fieldType = type.includes('Dropdown') ? 'combobox' : 'listbox';
-            try { 
+            try {
               options = field.getOptions() || [];
               const selected = field.getSelected();
               value = Array.isArray(selected) ? selected[0] || '' : selected || '';
@@ -1701,7 +1520,7 @@ export async function extractPdfFormFields(file) {
           fields.push({
             id: `detected-${index}-${wIdx}-${Date.now()}`,
             name: name || `Field_${index + 1}`,
-            originalName: name, // Track original AcroField name for delete/update
+            originalName: name,
             type: fieldType,
             page: pageIndex + 1,
             xPercent,
@@ -1710,7 +1529,7 @@ export async function extractPdfFormFields(file) {
             heightPercent,
             value: value,
             options: options,
-            readOnly: false, // Make unlocked by default so user can edit in tool
+            readOnly: false,
             required: field.isRequired ? field.isRequired() : false,
             multiline: field.isMultiline ? field.isMultiline() : false,
             includeIndicator: false,
@@ -1739,10 +1558,6 @@ export async function extractPdfFormFields(file) {
   };
 }
 
-/**
- * Bake filled form data and create genuine, interactive, editable AcroForm widgets in the PDF.
- * Purges original widgets so that deletions and drag-moves never duplicate or leave ghost fields.
- */
 export async function savePdfForms(file, formFields) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -1756,10 +1571,6 @@ export async function savePdfForms(file, formFields) {
   const form = pdfDoc.getForm();
   const pages = pdfDoc.getPages();
 
-  // ------------------------------------------------------------------
-  // STEP 1: Physically purge all existing AcroForm fields and Widget Annots
-  // This prevents deleted fields from lingering and moved fields from duplicating!
-  // ------------------------------------------------------------------
   try {
     const existingAcroFields = [...form.getFields()];
     existingAcroFields.forEach((f) => {
@@ -1768,7 +1579,6 @@ export async function savePdfForms(file, formFields) {
       } catch (_) {}
     });
 
-    // Clean up annotation references on each page so no ghost borders stay behind
     pages.forEach((page) => {
       const annots = page.node.Annots();
       if (annots) {
@@ -1786,9 +1596,6 @@ export async function savePdfForms(file, formFields) {
     console.warn('Cleanup error:', cleanErr);
   }
 
-  // ------------------------------------------------------------------
-  // STEP 2: Re-embed fonts for interactive appearances
-  // ------------------------------------------------------------------
   const fonts = {
     Helvetica: await pdfDoc.embedFont(StandardFonts.Helvetica),
     HelveticaBold: await pdfDoc.embedFont(StandardFonts.HelveticaBold),
@@ -1798,9 +1605,6 @@ export async function savePdfForms(file, formFields) {
     CourierBold: await pdfDoc.embedFont(StandardFonts.CourierBold),
   };
 
-  // ------------------------------------------------------------------
-  // STEP 3: Recreate ONLY the currently active fields at their latest coordinates
-  // ------------------------------------------------------------------
   for (let i = 0; i < formFields.length; i++) {
     const field = formFields[i];
     const targetPage = pages[Math.max(0, Math.min(field.page - 1, pages.length - 1))];
@@ -1824,7 +1628,6 @@ export async function savePdfForms(file, formFields) {
     const b = parseInt(hex.substring(4, 6), 16) / 255 || 0;
     const textColor = rgb(r, g, b);
 
-    // 1. Static Form Text (Annotation only)
     if (field.type === 'formtext') {
       if (field.value) {
         targetPage.drawText(String(field.value), {
@@ -1849,7 +1652,6 @@ export async function savePdfForms(file, formFields) {
       continue;
     }
 
-    // 2. Field Indicator Stamp (If enabled)
     if (field.includeIndicator) {
       const indLabel = field.indicatorText || 'Sign Here';
       const indFontSize = 8;
@@ -1877,7 +1679,6 @@ export async function savePdfForms(file, formFields) {
       });
     }
 
-    // 3. Recreate clean AcroForm Widgets with unique names
     const cleanBase = (field.name || `field_${i}`).trim().replace(/[^a-zA-Z0-9_-]/g, '_');
     const uniqueFieldName = `${cleanBase}_${i}`;
 
@@ -1978,7 +1779,6 @@ export async function savePdfForms(file, formFields) {
         tf.updateAppearances(fonts.TimesBold);
         if (field.readOnly) tf.enableReadOnly();
       } else {
-        // Text field
         const tf = form.createTextField(uniqueFieldName);
         tf.addToPage(targetPage, {
           x: pdfX,
@@ -2012,22 +1812,41 @@ export async function savePdfForms(file, formFields) {
   };
 }
 
-/**
- * Extract words from a Tesseract.js recognize() result.
- *
- * Handles BOTH output shapes:
- *   • Legacy flat (tesseract.js v4 and earlier, or when requested explicitly):
- *       data.words[]
- *   • Modern nested (tesseract.js v5, v6, v7+):
- *       data.blocks[].paragraphs[].lines[].words[]
- *
- * @param {Object} data - The `data` object returned by `worker.recognize()`.
- * @returns {Array<{ text: string, bbox: {x0:number,y0:number,x1:number,y1:number}, confidence: number }>}
- */
+/* =========================================================================
+ * OCR — BentoPDF-style implementation
+ * ========================================================================= */
+
+const OCR_DPI_PRESETS = {
+  standard: 192,
+  high: 288,
+  ultra: 384,
+};
+
+export const OCR_WHITELIST_PRESETS = {
+  none: '',
+  invoice: '0123456789$.,/\\-#: ',
+  numbers: '0123456789.,-',
+  alphanumeric: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ',
+  letters: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ',
+};
+
+function binarizeCanvasInPlace(canvas) {
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    const v = gray > 128 ? 255 : 0;
+    d[i] = v;
+    d[i + 1] = v;
+    d[i + 2] = v;
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+
 function extractTesseractWords(data) {
   const out = [];
 
-  // Legacy flat output (tesseract.js v4 and earlier)
   if (Array.isArray(data?.words) && data.words.length > 0) {
     for (const w of data.words) {
       if (w && typeof w.text === 'string' && w.text.trim() && w.bbox) {
@@ -2037,7 +1856,6 @@ function extractTesseractWords(data) {
     if (out.length > 0) return out;
   }
 
-  // Modern nested output (tesseract.js v5, v6, v7+)
   if (Array.isArray(data?.blocks)) {
     for (const block of data.blocks) {
       const paras = block?.paragraphs;
@@ -2061,17 +1879,6 @@ function extractTesseractWords(data) {
   return out;
 }
 
-/**
- * Parse Tesseract's TSV output (level 5 rows = words).
- *
- * The TSV format is stable across every tesseract.js version and is used as
- * a robust fallback whenever `data.blocks` is unavailable or empty for any
- * reason. Columns:
- *   level  page_num  block_num  par_num  line_num  word_num  left  top  width  height  conf  text
- *
- * @param {string} tsvText
- * @returns {Array<{ text: string, bbox: {x0:number,y0:number,x1:number,y1:number}, confidence: number }>}
- */
 function parseTesseractTsv(tsvText) {
   if (!tsvText || typeof tsvText !== 'string') return [];
   const lines = tsvText.split('\n');
@@ -2082,7 +1889,7 @@ function parseTesseractTsv(tsvText) {
     if (!line) continue;
     const cols = line.split('\t');
     if (cols.length < 12) continue;
-    if (cols[0] !== '5') continue; // level 5 = word
+    if (cols[0] !== '5') continue;
 
     const left = parseFloat(cols[6]);
     const top = parseFloat(cols[7]);
@@ -2104,29 +1911,98 @@ function parseTesseractTsv(tsvText) {
   return out;
 }
 
+function escapePdfLiteralString(s) {
+  return String(s)
+    .replace(/\\/g, '\\\\')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)')
+    .replace(/[\r\n\t\f\v\0]/g, ' ');
+}
+
 /**
- * Genuine In-Browser WebAssembly OCR Engine with Granular Real-Time Progress Tracking.
- * Hooked into Tesseract's internal recognition logger for smooth, uninterrupted progress updates.
+ * Analyze a word's ink-height metrics relative to its em box.
  *
- * The output searchable PDF embeds the rendered page bitmap and stamps a real
- * hidden text layer over each recognized word. The text is hidden using the
- * PDF text rendering mode "3" (Tr 3), which is the specification-sanctioned
- * way to draw invisible text — it is fully searchable, selectable, and
- * extractable in EVERY PDF viewer (Adobe Acrobat, Preview, PDFium, pdf.js,
- * and any OCR/DMS pipeline).
+ * Tesseract's word bbox is the INK bounding box — the union of the pixels
+ * of every glyph in the word. Its height therefore depends on which
+ * characters the word contains:
  *
- * IMPORTANT: tesseract.js v5+ no longer populates data.blocks by default.
- * We pass `{ blocks: true, tsv: true, text: true }` as the third argument to
- * worker.recognize() so the detailed word tree (and TSV fallback) is available.
+ *   • Words with full ascenders or capitals (b d f h k l, A-Z) —
+ *     ink top is at the ascender height, roughly 0.72 em above the baseline.
+ *   • Words with only x-height letters (a c e i m n o r s u v w x z) —
+ *     ink top is at the x-height, roughly 0.52 em above the baseline.
+ *   • Words with descenders (g j p q y) — ink bottom extends to roughly
+ *     0.21 em below the baseline.
  *
- * @param {File} file - Scanned PDF file
- * @param {Object} options - { language: 'eng', onProgress: Function, outputMode: 'searchable_pdf' | 'text' }
+ * Deriving the em size directly from the bbox height (the previous
+ * implementation) caused the invisible text — and therefore the selection
+ * quad — to be much smaller than the visible glyphs, because the em box
+ * was never accounted for. This function returns the correct ratios so the
+ * em size can be recovered from the ink height.
+ *
+ * @param {string} word
+ * @returns {{ topRatio: number, bottomRatio: number, inkRatio: number }}
+ */
+function analyzeWordInkMetrics(word) {
+  const w = String(word || '');
+  const lower = w.toLowerCase();
+
+  // Full-height characters: b d f h k l plus every uppercase letter.
+  const hasFullAscender = /[bdfhkl]/.test(lower) || /[A-Z]/.test(w);
+
+  // Partial-height characters: t (short ascender ~0.63 em), i/j dots (~0.70 em).
+  const hasSemiAscender = /[ti]/.test(lower) || /[j]/.test(lower);
+
+  // Descenders: g j p q y.
+  const hasDescender = /[gjpqy]/.test(lower);
+
+  let topRatio;
+  if (hasFullAscender) topRatio = 0.72;
+  else if (hasSemiAscender) topRatio = 0.66;
+  else topRatio = 0.52;
+
+  const bottomRatio = hasDescender ? 0.21 : 0;
+
+  return { topRatio, bottomRatio, inkRatio: topRatio + bottomRatio };
+}
+
+/**
+ * Genuine In-Browser WebAssembly OCR Engine with Granular Real-Time Progress
+ * Tracking, matching BentoPDF's algorithm and output quality:
+ *
+ *   • Renders the page at a user-selected DPI (192 / 288 / 384).
+ *   • Optional binarization and character whitelist for accuracy tuning.
+ *   • Embeds the rendered page as a LOSSLESS PNG (not JPEG) so no visible
+ *     compression artifacts are introduced.
+ *   • Stamps each recognized word as a single text-showing operation using
+ *     the PDF text operators BT / Tf / Tz / Td / Tj / ET, with:
+ *        – font size derived from the word's ink-height metrics (see
+ *          analyzeWordInkMetrics) so the invisible em box matches the
+ *          visible glyphs;
+ *        – baseline placed at the correct position for the word's ascender
+ *          and descender composition;
+ *        – horizontal scaling (Tz) so the run's natural width matches the
+ *          OCR bbox width exactly;
+ *        – invisible rendering mode 3 (Tr 3) — the specification-sanctioned
+ *          way to hide text while keeping it fully searchable, selectable,
+ *          and extractable in every PDF viewer, including Adobe Acrobat.
+ *
+ * @param {File} file
+ * @param {Object} options
+ *   language      — Tesseract language code (default 'eng')
+ *   onProgress    — progress callback
+ *   outputMode    — 'searchable_pdf' | 'text'
+ *   dpiPreset     — 'standard' | 'high' | 'ultra'   (default 'high')
+ *   charWhitelist — allowed-character string (empty = all)
+ *   binarize      — boolean, apply black/white threshold before OCR
  */
 export async function performPdfOcr(file, options = {}) {
   const {
     language = 'eng',
     onProgress = () => {},
-    outputMode = 'searchable_pdf'
+    outputMode = 'searchable_pdf',
+    dpiPreset = 'high',
+    charWhitelist = '',
+    binarize = false,
   } = options;
 
   const isLocked = await checkPdfPassword(file);
@@ -2140,18 +2016,19 @@ export async function performPdfOcr(file, options = {}) {
   const pdfJsDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   const totalPages = pdfJsDoc.numPages;
 
+  const dpi = OCR_DPI_PRESETS[dpiPreset] || OCR_DPI_PRESETS.high;
+  const renderScale = dpi / 72;
+
   let currentPageNum = 1;
 
   onProgress({ status: 'Loading OCR Engine & Models...', percent: 5 });
 
-  // Step 1: Hook Tesseract's real-time logger for granular sub-page progress updates
   const worker = await createWorker(language, 1, {
     logger: (m) => {
       if (m && m.status === 'recognizing text' && typeof m.progress === 'number') {
         const pagePortion = 90 / totalPages;
         const basePagePercent = 5 + (currentPageNum - 1) * pagePortion;
         const currentSubPercent = Math.round(basePagePercent + m.progress * pagePortion);
-
         onProgress({
           status: `Scanning Page ${currentPageNum} of ${totalPages} (${Math.round(m.progress * 100)}%)...`,
           percent: Math.min(95, currentSubPercent)
@@ -2165,41 +2042,52 @@ export async function performPdfOcr(file, options = {}) {
     }
   });
 
+  if (charWhitelist && charWhitelist.length > 0) {
+    try {
+      await worker.setParameters({ tessedit_char_whitelist: charWhitelist });
+    } catch (e) {
+      console.warn('[OCR] Failed to set character whitelist:', e);
+    }
+  }
+
   const outputPdfDoc = await PDFDocument.create();
   const helveticaFont = await outputPdfDoc.embedFont(StandardFonts.Helvetica);
   let extractedFullText = '';
 
-  // Pre-build the "Set text rendering mode to invisible" (Tr 3) operators.
-  // Tr is a text-state operator that lives in the PDF graphics state and can
-  // legally appear outside BT/ET blocks. It persists until changed.
-  const setTextRenderingInvisible = PDFOperator.of('Tr', [PDFNumber.of(3)]);
-  const setTextRenderingVisible = PDFOperator.of('Tr', [PDFNumber.of(0)]);
+  const opSave = PDFOperator.of('q');
+  const opRestore = PDFOperator.of('Q');
+  const opTrInvisible = PDFOperator.of('Tr', [PDFNumber.of(3)]);
+  const opTrVisible = PDFOperator.of('Tr', [PDFNumber.of(0)]);
 
   try {
     for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
       currentPageNum = pageNum;
 
       onProgress({
-        status: `Rendering Page ${pageNum} of ${totalPages}...`,
+        status: `Rendering Page ${pageNum} of ${totalPages} at ${dpi} DPI...`,
         percent: Math.round(5 + ((pageNum - 1) / totalPages) * 90)
       });
 
       const page = await pdfJsDoc.getPage(pageNum);
-      const viewport = page.getViewport({ scale: 2.0 });
+      const viewport = page.getViewport({ scale: renderScale });
 
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       canvas.width = viewport.width;
       canvas.height = viewport.height;
 
+      // Fill white first so PNG has an opaque base (canvas defaults to
+      // transparent, and transparent PNGs are larger and can confuse some
+      // downstream OCR / indexing pipelines).
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
       await page.render({ canvasContext: ctx, viewport }).promise;
 
-      // ------------------------------------------------------------------
-      // CRITICAL: tesseract.js v5+ only generates `blocks` / `tsv` when
-      // they are explicitly requested via the third argument to recognize().
-      // Without this, `data.blocks` and `data.words` are both undefined and
-      // no text layer can be built.
-      // ------------------------------------------------------------------
+      if (binarize) {
+        try { binarizeCanvasInPlace(canvas); } catch (_) {}
+      }
+
       const { data } = await worker.recognize(canvas, {}, {
         text: true,
         blocks: true,
@@ -2209,12 +2097,29 @@ export async function performPdfOcr(file, options = {}) {
       extractedFullText += `--- Page ${pageNum} ---\n` + (data.text || '') + '\n\n';
 
       if (outputMode === 'searchable_pdf') {
-        const imgDataUrl = canvas.toDataURL('image/jpeg', 0.88);
-        const imgBytes = await (await fetch(imgDataUrl)).arrayBuffer();
-        const embeddedImg = await outputPdfDoc.embedJpg(imgBytes);
+        // ------------------------------------------------------------------
+        // PIXEL QUALITY FIX
+        //
+        // The page image is embedded as a LOSSLESS PNG. JPEG (even at 0.95
+        // quality) introduces 8×8 block artifacts that are especially
+        // destructive on crisp vector text and logos, and those artifacts
+        // persist through every subsequent render. PNG preserves the
+        // rasterized page exactly as pdf.js produced it, so the visible
+        // output is identical to the source.
+        // ------------------------------------------------------------------
+        const imgBytes = await new Promise((resolve, reject) => {
+          canvas.toBlob((blob) => {
+            if (!blob) { reject(new Error('Canvas toBlob returned null')); return; }
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsArrayBuffer(blob);
+          }, 'image/png');
+        });
+        const embeddedImg = await outputPdfDoc.embedPng(imgBytes);
 
-        const pdfPageW = viewport.width / 2.0;
-        const pdfPageH = viewport.height / 2.0;
+        const pdfPageW = viewport.width / renderScale;
+        const pdfPageH = viewport.height / renderScale;
         const newPage = outputPdfDoc.addPage([pdfPageW, pdfPageH]);
 
         newPage.drawImage(embeddedImg, {
@@ -2224,7 +2129,6 @@ export async function performPdfOcr(file, options = {}) {
           height: pdfPageH,
         });
 
-        // Try nested blocks tree first; fall back to parsing the TSV output.
         let tesseractWords = extractTesseractWords(data);
         let source = 'blocks';
         if (tesseractWords.length === 0 && data.tsv) {
@@ -2233,50 +2137,113 @@ export async function performPdfOcr(file, options = {}) {
         }
 
         console.log(
-          `[OCR] Page ${pageNum}: ${tesseractWords.length} words extracted (source=${source}, ` +
-          `hasBlocks=${Array.isArray(data.blocks)}, hasWords=${Array.isArray(data.words)}, ` +
-          `hasTsv=${typeof data.tsv === 'string'})`
+          `[OCR] Page ${pageNum}: ${tesseractWords.length} words extracted ` +
+          `(source=${source}, dpi=${dpi})`
         );
 
         if (tesseractWords.length > 0) {
+          let fontKey = null;
+          try {
+            fontKey = newPage.node.newFontDictionary(helveticaFont.name, helveticaFont.ref);
+          } catch (regErr) {
+            console.warn('[OCR] Font registration failed, falling back to drawText:', regErr);
+          }
+
           const scaleX = pdfPageW / canvas.width;
           const scaleY = pdfPageH / canvas.height;
 
-          // Switch to invisible text rendering mode for the whole text layer.
-          newPage.pushOperators(setTextRenderingInvisible);
+          newPage.pushOperators(opSave, opTrInvisible);
 
           for (const w of tesseractWords) {
             const wordText = (w.text || '').trim();
             if (!wordText) continue;
-
             const bbox = w.bbox;
             if (!bbox) continue;
 
-            const wordX = bbox.x0 * scaleX;
-            const wordHeight = Math.max(6, (bbox.y1 - bbox.y0) * scaleY);
-            // PDF origin is bottom-left; canvas origin is top-left.
-            const wordY = pdfPageH - (bbox.y1 * scaleY);
+            // Map bbox from canvas pixels to PDF points.
+            const boxLeft = bbox.x0 * scaleX;
+            const boxTopPdf = pdfPageH - bbox.y0 * scaleY;
+            const boxBottomPdf = pdfPageH - bbox.y1 * scaleY;
+            const boxWidth = (bbox.x1 - bbox.x0) * scaleX;
+            const boxHeight = (bbox.y1 - bbox.y0) * scaleY;
 
-            // Font size derived from glyph bbox height. No `maxWidth` — pdf-lib
-            // would otherwise shrink text and produce unselectable sub-pixel
-            // glyphs in some viewers.
-            const estimatedFontSize = Math.max(5, Math.min(wordHeight * 0.9, 36));
+            if (boxWidth <= 0 || boxHeight <= 0) continue;
 
+            // --------------------------------------------------------------
+            // ALIGNMENT FIX
+            //
+            // The OCR bbox is the INK bounding box. Its height depends on
+            // which characters the word contains. To make the invisible text
+            // render at the correct em size, we derive the em height from
+            // the ink composition:
+            //
+            //   fontSize = boxHeight / inkRatio
+            //
+            // Then we place the baseline so the invisible em box lines up
+            // with the visible glyphs:
+            //
+            //   baselineY = boxTop - topRatio * fontSize
+            //
+            // This makes the selection quad (which Acrobat derives from the
+            // font's ascent/descent) track the visible glyphs exactly.
+            // --------------------------------------------------------------
+            const { topRatio, inkRatio } = analyzeWordInkMetrics(wordText);
+
+            const fontSize = boxHeight / Math.max(inkRatio, 0.1);
+            const baselineY = boxTopPdf - topRatio * fontSize;
+
+            // Horizontal scaling: match the word's natural advance width
+            // to the bbox width so the selection rectangle spans exactly
+            // the visible glyphs horizontally.
+            let naturalWidth = 0;
             try {
-              newPage.drawText(wordText, {
-                x: wordX,
-                y: wordY,
-                size: estimatedFontSize,
-                font: helveticaFont,
-                color: rgb(0, 0, 0),
-              });
-            } catch (_) {
-              // Ignore unsupported character glyph exceptions safely
+              naturalWidth = helveticaFont.widthOfTextAtSize(wordText, fontSize);
+            } catch (_) { naturalWidth = 0; }
+
+            let hScale = 100;
+            if (naturalWidth > 0 && boxWidth > 0) {
+              hScale = (boxWidth / naturalWidth) * 100;
+              // Clamp to a sane range to prevent pathological stretching
+              // when the bbox is obviously wrong.
+              if (hScale < 30) hScale = 30;
+              if (hScale > 300) hScale = 300;
+            }
+
+            if (fontKey) {
+              try {
+                newPage.pushOperators(
+                  PDFOperator.of('BT'),
+                  PDFOperator.of('Tf', [PDFName.of(fontKey), PDFNumber.of(fontSize)]),
+                  PDFOperator.of('Tz', [PDFNumber.of(hScale)]),
+                  PDFOperator.of('Td', [PDFNumber.of(boxLeft), PDFNumber.of(baselineY)]),
+                  PDFOperator.of('Tj', [PDFString.of(escapePdfLiteralString(wordText))]),
+                  PDFOperator.of('ET')
+                );
+              } catch (opErr) {
+                try {
+                  newPage.drawText(wordText, {
+                    x: boxLeft,
+                    y: baselineY,
+                    size: fontSize,
+                    font: helveticaFont,
+                    color: rgb(0, 0, 0),
+                  });
+                } catch (_) { /* skip word */ }
+              }
+            } else {
+              try {
+                newPage.drawText(wordText, {
+                  x: boxLeft,
+                  y: baselineY,
+                  size: fontSize,
+                  font: helveticaFont,
+                  color: rgb(0, 0, 0),
+                });
+              } catch (_) { /* skip word */ }
             }
           }
 
-          // Restore normal rendering mode for anything drawn afterwards.
-          newPage.pushOperators(setTextRenderingVisible);
+          newPage.pushOperators(opTrVisible, opRestore);
         }
       }
     }
@@ -2309,20 +2276,6 @@ export async function performPdfOcr(file, options = {}) {
   };
 }
 
-/**
- * Edit PDF text in place + add new text/shape additions.
- *
- * @param {File} file - Original PDF
- * @param {Array} edits - Existing-span edits (same shape as before)
- * @param {Array} additions - New text/shape additions:
- *   {
- *     page: 1,
- *     type: 'text' | 'shape',
- *     bbox: {x0, y0, x1, y1},   // PDF points, top-down
- *     // text: text, fontName, fontSize, color, bold, italic, underline
- *     // shape: shapeType, strokeColor, strokeWidth, fillColor
- *   }
- */
 export async function editPdfText(file, edits, additions = []) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
@@ -2339,7 +2292,6 @@ export async function editPdfText(file, edits, additions = []) {
   formData.append('edits', JSON.stringify(edits || []));
   formData.append('additions', JSON.stringify(additions || []));
 
-  //const response = await fetch('/api/edit-pdf', {
   const response = await fetch(`${API_BASE_URL}/api/edit-pdf`, {
     method: 'POST',
     body: formData,

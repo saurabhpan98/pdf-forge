@@ -85,7 +85,8 @@ import {
   checkExcelPassword,
   extractPdfFormFields,
   savePdfForms,
-  performPdfOcr
+  performPdfOcr,
+  OCR_WHITELIST_PRESETS,
 } from '../utils/pdfWorker';
 import EditPdfStudio from './EditPdfStudio';
 
@@ -113,10 +114,14 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   // Compression tool settings
   const [compressionPercent, setCompressionPercent] = useState(45);
 
-  // OCR Tool Settings
+    // OCR Tool Settings
   const [ocrLanguage, setOcrLanguage] = useState('eng');
   const [ocrOutputMode, setOcrOutputMode] = useState('searchable_pdf'); // 'searchable_pdf' | 'text'
   const [ocrProgress, setOcrProgress] = useState({ status: '', percent: 0 });
+  const [ocrDpiPreset, setOcrDpiPreset] = useState('high');       // 'standard' | 'high' | 'ultra'
+  const [ocrWhitelistPreset, setOcrWhitelistPreset] = useState('none'); // preset key
+  const [ocrCustomWhitelist, setOcrCustomWhitelist] = useState('');
+  const [ocrBinarize, setOcrBinarize] = useState(false);
 
   // Password Protection State
   const [protectPassword, setProtectPassword] = useState('');
@@ -937,13 +942,28 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     try {
       let output;
       switch (tool?.id) {
-        case 'ocr':
-          output = await performPdfOcr(files[0], {
-            language: ocrLanguage,
-            outputMode: ocrOutputMode,
-            onProgress: (prog) => setOcrProgress(prog)
-          });
-          break;
+          case 'ocr': {
+            // Resolve the effective character whitelist:
+            //   - preset 'none'  → empty (all characters)
+            //   - preset 'custom' → the user's custom string
+            //   - any other preset → look it up in OCR_WHITELIST_PRESETS
+            let effectiveWhitelist = '';
+            if (ocrWhitelistPreset === 'custom') {
+              effectiveWhitelist = ocrCustomWhitelist || '';
+            } else if (ocrWhitelistPreset !== 'none') {
+              effectiveWhitelist = OCR_WHITELIST_PRESETS[ocrWhitelistPreset] || '';
+            }
+
+            output = await performPdfOcr(files[0], {
+              language: ocrLanguage,
+              outputMode: ocrOutputMode,
+              dpiPreset: ocrDpiPreset,
+              charWhitelist: effectiveWhitelist,
+              binarize: ocrBinarize,
+              onProgress: (prog) => setOcrProgress(prog)
+            });
+            break;
+          }
         case 'forms':
           output = await savePdfForms(files[0], formFields);
           break;
@@ -1460,7 +1480,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
         {!result ? (
           <div className={`${isFormsStudio ? 'flex-1 min-h-0 flex flex-col' : 'space-y-6'}`}>
-            {/* OCR PDF Studio (Searchable PDF & Plain Text) */}
+                        {/* OCR PDF Studio (Searchable PDF & Plain Text) */}
             {tool?.id === 'ocr' && (
               <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 max-w-xl mx-auto space-y-6 shadow-sm">
                 <div className="text-center space-y-2">
@@ -1476,6 +1496,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                 {files[0] && renderSingleFileThumbnailCard(files[0])}
 
                 <div className="space-y-4 pt-2 border-t border-slate-100 text-xs">
+                  {/* Language */}
                   <div>
                     <label className="font-bold text-slate-800 block mb-1.5">Document Language</label>
                     <select
@@ -1491,6 +1512,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                     </select>
                   </div>
 
+                  {/* Output Format */}
                   <div>
                     <label className="font-bold text-slate-800 block mb-1.5">Output Format</label>
                     <div className="grid grid-cols-2 gap-2">
@@ -1518,6 +1540,80 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                       </button>
                     </div>
                   </div>
+
+                  {/* DPI Preset */}
+                  <div>
+                    <label className="font-bold text-slate-800 block mb-1.5">Recognition Quality (DPI)</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { id: 'standard', label: 'Standard', dpi: '192 DPI', note: 'Fastest' },
+                        { id: 'high',     label: 'High',     dpi: '288 DPI', note: 'Recommended' },
+                        { id: 'ultra',    label: 'Ultra',    dpi: '384 DPI', note: 'Best accuracy' },
+                      ].map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setOcrDpiPreset(opt.id)}
+                          className={`p-3 rounded-xl border text-center transition cursor-pointer ${
+                            ocrDpiPreset === opt.id
+                              ? 'border-teal-500 bg-teal-50 text-teal-700 shadow-xs'
+                              : 'border-slate-200 bg-white text-slate-600'
+                          }`}
+                        >
+                          <div className="font-bold">{opt.label}</div>
+                          <div className="text-[10px] opacity-70">{opt.dpi}</div>
+                          <div className="text-[9px] opacity-60 mt-0.5">{opt.note}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Character Whitelist */}
+                  <div>
+                    <label className="font-bold text-slate-800 block mb-1.5">Character Whitelist</label>
+                    <select
+                      value={ocrWhitelistPreset}
+                      onChange={(e) => setOcrWhitelistPreset(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                    >
+                      <option value="none">All characters (default)</option>
+                      <option value="invoice">Invoice (digits + $ . , / - # :)</option>
+                      <option value="numbers">Numbers only (0-9 . , -)</option>
+                      <option value="alphanumeric">Letters + digits</option>
+                      <option value="letters">Letters only</option>
+                      <option value="custom">Custom…</option>
+                    </select>
+                    {ocrWhitelistPreset === 'custom' && (
+                      <input
+                        type="text"
+                        value={ocrCustomWhitelist}
+                        onChange={(e) => setOcrCustomWhitelist(e.target.value)}
+                        placeholder="e.g. 0123456789$.,/"
+                        className="mt-2 w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-xs focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                      />
+                    )}
+                    <p className="text-[10px] text-slate-400 mt-1.5 leading-relaxed">
+                      Restricts recognition to specific characters, reducing misreads like{' '}
+                      <code className="px-1 bg-slate-100 rounded">l</code>→
+                      <code className="px-1 bg-slate-100 rounded">1</code>.
+                    </p>
+                  </div>
+
+                  {/* Binarize */}
+                  <label className="flex items-start space-x-2.5 cursor-pointer p-3 rounded-xl border border-slate-200 bg-slate-50/60 hover:bg-slate-100/70 transition">
+                    <input
+                      type="checkbox"
+                      checked={ocrBinarize}
+                      onChange={(e) => setOcrBinarize(e.target.checked)}
+                      className="w-4 h-4 rounded accent-teal-600 mt-0.5"
+                    />
+                    <div>
+                      <div className="font-bold text-slate-800">Binarize (black &amp; white)</div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        Recommended for faded or low-contrast scans.
+                      </div>
+                    </div>
+                  </label>
                 </div>
 
                 {isProcessing && (
