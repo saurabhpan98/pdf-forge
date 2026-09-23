@@ -1813,7 +1813,20 @@ export async function savePdfForms(file, formFields) {
 }
 
 /* =========================================================================
- * OCR — BentoPDF-style implementation
+ *  OCR implementation
+ *
+ *  Pipeline:
+ *    1. Copy the ORIGINAL pages into the output PDF (no rasterization → no
+ *       pixel loss).
+ *    2. Rasterize each page in-memory at a user-selected DPI purely as OCR
+ *       input; the canvas is discarded immediately afterwards.
+ *    3. Tesseract is asked for hOCR output — it carries per-word bounding
+ *       boxes, per-line baseline slope + intercept, and text angle.
+ *    4. For each word we iteratively solve the font size so its natural
+ *       width matches the bbox width, place the baseline at the bottom of
+ *       the bbox, and draw the word with opacity 0.
+ *    5. Real Noto Sans fonts (subsetted) are embedded so glyph coverage
+ *       matches the recognition language.
  * ========================================================================= */
 
 const OCR_DPI_PRESETS = {
@@ -1824,11 +1837,65 @@ const OCR_DPI_PRESETS = {
 
 export const OCR_WHITELIST_PRESETS = {
   none: '',
-  invoice: '0123456789$.,/\\-#: ',
+  invoice: '0123456789$.,/-#: ',
   numbers: '0123456789.,-',
-  alphanumeric: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ',
+  alphanumeric: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?-\'"',
   letters: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ',
 };
+
+// ---------------------------------------------------------------------------
+// Language → Noto font family
+// ---------------------------------------------------------------------------
+const LANGUAGE_TO_FONT_FAMILY = {
+  eng: 'Noto Sans', spa: 'Noto Sans', fra: 'Noto Sans', deu: 'Noto Sans',
+  ita: 'Noto Sans', por: 'Noto Sans', nld: 'Noto Sans', pol: 'Noto Sans',
+  rus: 'Noto Sans', ukr: 'Noto Sans', bel: 'Noto Sans', bul: 'Noto Sans',
+  hin: 'Noto Sans Devanagari', mar: 'Noto Sans Devanagari',
+  nep: 'Noto Sans Devanagari', san: 'Noto Sans Devanagari',
+  ara: 'Noto Naskh Arabic',
+  chi_sim: 'Noto Sans SC', chi_tra: 'Noto Sans TC',
+  jpn: 'Noto Sans JP', kor: 'Noto Sans KR',
+};
+
+const FONT_FAMILY_TO_URL = {
+  'Noto Sans': 'https://rawcdn.githack.com/googlefonts/noto-fonts/ffebf8c1ee449e544955a7e813c54f9b73848eac/hinted/ttf/NotoSans/NotoSans-Regular.ttf',
+  'Noto Sans Devanagari': 'https://rawcdn.githack.com/googlefonts/noto-fonts/ffebf8c1ee449e544955a7e813c54f9b73848eac/unhinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Regular.ttf',
+  'Noto Naskh Arabic': 'https://rawcdn.githack.com/googlefonts/noto-fonts/ffebf8c1ee449e544955a7e813c54f9b73848eac/hinted/ttf/NotoNaskhArabic/NotoNaskhArabic-Regular.ttf',
+  'Noto Sans SC': 'https://rawcdn.githack.com/googlefonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf',
+  'Noto Sans TC': 'https://rawcdn.githack.com/googlefonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf',
+  'Noto Sans JP': 'https://rawcdn.githack.com/googlefonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf',
+  'Noto Sans KR': 'https://rawcdn.githack.com/googlefonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/Korean/NotoSansCJKkr-Regular.otf',
+};
+
+const _ocrFontBytesCache = new Map();
+
+async function getOcrFontBytesForLanguage(lang) {
+  const primary = String(lang || 'eng').split('+')[0];
+  const family = LANGUAGE_TO_FONT_FAMILY[primary] || 'Noto Sans';
+  if (_ocrFontBytesCache.has(family)) return _ocrFontBytesCache.get(family);
+
+  const url = FONT_FAMILY_TO_URL[family] || FONT_FAMILY_TO_URL['Noto Sans'];
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch OCR font "${family}" (HTTP ${res.status})`);
+  const bytes = await res.arrayBuffer();
+  _ocrFontBytesCache.set(family, bytes);
+  return bytes;
+}
+
+let _fontkitPromise = null;
+async function getFontkit() {
+  if (_fontkitPromise) return _fontkitPromise;
+  _fontkitPromise = (async () => {
+    try {
+      const mod = await import('@pdf-lib/fontkit');
+      return mod.default || mod;
+    } catch (e) {
+      console.warn('[OCR] @pdf-lib/fontkit not installed — falling back to Helvetica. Run: npm install @pdf-lib/fontkit');
+      return null;
+    }
+  })();
+  return _fontkitPromise;
+}
 
 function binarizeCanvasInPlace(canvas) {
   const ctx = canvas.getContext('2d');
@@ -1837,21 +1904,160 @@ function binarizeCanvasInPlace(canvas) {
   for (let i = 0; i < d.length; i += 4) {
     const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
     const v = gray > 128 ? 255 : 0;
-    d[i] = v;
-    d[i + 1] = v;
-    d[i + 2] = v;
+    d[i] = v; d[i + 1] = v; d[i + 2] = v;
   }
   ctx.putImageData(imgData, 0, 0);
 }
 
+// ---------------------------------------------------------------------------
+// hOCR parsing
+// ---------------------------------------------------------------------------
+const RE_BBOX = /bbox\s+(-?\d+\.?\d*)\s+(-?\d+\.?\d*)\s+(-?\d+\.?\d*)\s+(-?\d+\.?\d*)/;
+const RE_BASELINE = /baseline\s+(-?\d*\.?\d*)\s+(-?\d*\.?\d*)/;
+const RE_TEXTANGLE = /textangle\s+(-?\d*\.?\d*)/;
+const RE_WCONF = /x_wconf\s+(-?\d+)/;
+
+function parseHocr(hocrText) {
+  if (!hocrText || typeof hocrText !== 'string') {
+    return { width: 0, height: 0, lines: [] };
+  }
+
+  let doc;
+  try {
+    doc = new DOMParser().parseFromString(hocrText, 'text/html');
+  } catch (e) {
+    console.warn('[OCR] hOCR parse failed:', e);
+    return { width: 0, height: 0, lines: [] };
+  }
+
+  let pageWidth = 0, pageHeight = 0;
+  const pageEl = doc.querySelector('.ocr_page');
+  if (pageEl) {
+    const m = (pageEl.getAttribute('title') || '').match(RE_BBOX);
+    if (m) {
+      pageWidth = parseFloat(m[3]) - parseFloat(m[1]);
+      pageHeight = parseFloat(m[4]) - parseFloat(m[2]);
+    }
+  }
+
+  const lines = [];
+  const lineEls = doc.querySelectorAll('.ocr_line, .ocr_textfloat, .ocr_header, .ocr_caption');
+
+  lineEls.forEach((lineEl) => {
+    const title = lineEl.getAttribute('title') || '';
+    const bm = title.match(RE_BBOX);
+    if (!bm) return;
+
+    const lineBbox = {
+      x0: parseFloat(bm[1]), y0: parseFloat(bm[2]),
+      x1: parseFloat(bm[3]), y1: parseFloat(bm[4]),
+    };
+
+    const baseMatch = title.match(RE_BASELINE);
+    const baseline = baseMatch
+      ? { slope: parseFloat(baseMatch[1]) || 0, intercept: parseFloat(baseMatch[2]) || 0 }
+      : { slope: 0, intercept: 0 };
+
+    const angleMatch = title.match(RE_TEXTANGLE);
+    const textangle = angleMatch ? parseFloat(angleMatch[1]) || 0 : 0;
+
+    const words = [];
+    lineEl.querySelectorAll('.ocrx_word').forEach((wEl) => {
+      const wt = wEl.getAttribute('title') || '';
+      const wb = wt.match(RE_BBOX);
+      if (!wb) return;
+      const text = (wEl.textContent || '').trim();
+      if (!text) return;
+      const cm = wt.match(RE_WCONF);
+      words.push({
+        text,
+        bbox: {
+          x0: parseFloat(wb[1]), y0: parseFloat(wb[2]),
+          x1: parseFloat(wb[3]), y1: parseFloat(wb[4]),
+        },
+        confidence: cm ? parseInt(cm[1], 10) : 0,
+      });
+    });
+
+    if (words.length > 0) {
+      lines.push({ bbox: lineBbox, baseline, textangle, words });
+    }
+  });
+
+  // Fallback: some hOCR emits only word elements without line containers.
+  if (lines.length === 0) {
+    const wordEls = Array.from(doc.querySelectorAll('.ocrx_word'));
+    if (wordEls.length > 0) {
+      const words = [];
+      wordEls.forEach((wEl) => {
+        const wt = wEl.getAttribute('title') || '';
+        const wb = wt.match(RE_BBOX);
+        if (!wb) return;
+        const text = (wEl.textContent || '').trim();
+        if (!text) return;
+        const cm = wt.match(RE_WCONF);
+        words.push({
+          text,
+          bbox: {
+            x0: parseFloat(wb[1]), y0: parseFloat(wb[2]),
+            x1: parseFloat(wb[3]), y1: parseFloat(wb[4]),
+          },
+          confidence: cm ? parseInt(cm[1], 10) : 0,
+        });
+      });
+      if (words.length > 0) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const w of words) {
+          if (w.bbox.x0 < minX) minX = w.bbox.x0;
+          if (w.bbox.y0 < minY) minY = w.bbox.y0;
+          if (w.bbox.x1 > maxX) maxX = w.bbox.x1;
+          if (w.bbox.y1 > maxY) maxY = w.bbox.y1;
+        }
+        lines.push({
+          bbox: { x0: minX, y0: minY, x1: maxX, y1: maxY },
+          baseline: { slope: 0, intercept: 0 },
+          textangle: 0,
+          words,
+        });
+      }
+    }
+  }
+
+  return { width: pageWidth, height: pageHeight, lines };
+}
+
+function scaleHocrToPdfPage(hocr, pdfWidth, pdfHeight) {
+  if (hocr.width <= 0 || hocr.height <= 0) return;
+  const sx = pdfWidth / hocr.width;
+  const sy = pdfHeight / hocr.height;
+  if (sx === 1 && sy === 1) return;
+
+  for (const line of hocr.lines) {
+    line.bbox = {
+      x0: line.bbox.x0 * sx, y0: line.bbox.y0 * sy,
+      x1: line.bbox.x1 * sx, y1: line.bbox.y1 * sy,
+    };
+    line.baseline = { slope: line.baseline.slope, intercept: line.baseline.intercept * sy };
+    for (const w of line.words) {
+      w.bbox = {
+        x0: w.bbox.x0 * sx, y0: w.bbox.y0 * sy,
+        x1: w.bbox.x1 * sx, y1: w.bbox.y1 * sy,
+      };
+    }
+  }
+  hocr.width = pdfWidth;
+  hocr.height = pdfHeight;
+}
+
+// ---------------------------------------------------------------------------
+// Fallback: build pseudo-lines from tesseract.js blocks when hOCR is absent.
+// ---------------------------------------------------------------------------
 function extractTesseractWords(data) {
   const out = [];
 
   if (Array.isArray(data?.words) && data.words.length > 0) {
     for (const w of data.words) {
-      if (w && typeof w.text === 'string' && w.text.trim() && w.bbox) {
-        out.push(w);
-      }
+      if (w && typeof w.text === 'string' && w.text.trim() && w.bbox) out.push(w);
     }
     if (out.length > 0) return out;
   }
@@ -1867,9 +2073,7 @@ function extractTesseractWords(data) {
           const words = line?.words;
           if (!Array.isArray(words)) continue;
           for (const w of words) {
-            if (w && typeof w.text === 'string' && w.text.trim() && w.bbox) {
-              out.push(w);
-            }
+            if (w && typeof w.text === 'string' && w.text.trim() && w.bbox) out.push(w);
           }
         }
       }
@@ -1879,122 +2083,112 @@ function extractTesseractWords(data) {
   return out;
 }
 
-function parseTesseractTsv(tsvText) {
-  if (!tsvText || typeof tsvText !== 'string') return [];
-  const lines = tsvText.split('\n');
-  const out = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line) continue;
-    const cols = line.split('\t');
-    if (cols.length < 12) continue;
-    if (cols[0] !== '5') continue;
-
-    const left = parseFloat(cols[6]);
-    const top = parseFloat(cols[7]);
-    const width = parseFloat(cols[8]);
-    const height = parseFloat(cols[9]);
-    const confidence = parseFloat(cols[10]);
-    const text = cols[11];
-
-    if (!text || !text.trim()) continue;
-    if (isNaN(left) || isNaN(top) || isNaN(width) || isNaN(height)) continue;
-
-    out.push({
-      text: text.trim(),
-      confidence: isNaN(confidence) ? 0 : confidence,
-      bbox: { x0: left, y0: top, x1: left + width, y1: top + height },
+function groupWordsIntoLines(words) {
+  // Group by rounded y-center. Tolerance of ~8px absorbs baseline jitter.
+  const buckets = new Map();
+  for (const w of words) {
+    const cy = Math.round((w.bbox.y0 + w.bbox.y1) / 2 / 8) * 8;
+    if (!buckets.has(cy)) buckets.set(cy, []);
+    buckets.get(cy).push(w);
+  }
+  const lines = [];
+  for (const [, arr] of buckets) {
+    arr.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const w of arr) {
+      if (w.bbox.x0 < minX) minX = w.bbox.x0;
+      if (w.bbox.y0 < minY) minY = w.bbox.y0;
+      if (w.bbox.x1 > maxX) maxX = w.bbox.x1;
+      if (w.bbox.y1 > maxY) maxY = w.bbox.y1;
+    }
+    lines.push({
+      bbox: { x0: minX, y0: minY, x1: maxX, y1: maxY },
+      baseline: { slope: 0, intercept: 0 },
+      textangle: 0,
+      words: arr,
     });
   }
-
-  return out;
+  return lines;
 }
 
-function escapePdfLiteralString(s) {
-  return String(s)
-    .replace(/\\/g, '\\\\')
-    .replace(/\(/g, '\\(')
-    .replace(/\)/g, '\\)')
-    .replace(/[\r\n\t\f\v\0]/g, ' ');
+// ---------------------------------------------------------------------------
+// Draw invisible text layer
+// ---------------------------------------------------------------------------
+function drawInvisibleTextLayer(page, hocr, pdfHeight, font) {
+  if (!font) return;
+
+  let dropped = 0;
+  let drawn = 0;
+
+  for (const line of hocr.lines) {
+    const lineRotation = -line.textangle + Math.atan(line.baseline.slope) * (180 / Math.PI);
+    const rotation = degrees(lineRotation);
+
+    for (const word of line.words) {
+      const text = String(word.text || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+
+      const boxLeft = word.bbox.x0;
+      const boxRight = word.bbox.x1;
+      const boxBottomPdf = pdfHeight - word.bbox.y1;
+      const boxWidth = boxRight - boxLeft;
+      const boxHeight = word.bbox.y1 - word.bbox.y0;
+      if (boxWidth <= 0 || boxHeight <= 0) continue;
+
+      // ----- Iteratively solve for font size such that the natural width
+      //       of the text at that size matches the bbox width. -----
+      let fontSize = Math.max(1, boxHeight);
+      for (let iter = 0; iter < 10; iter++) {
+        let currentWidth = 0;
+        try {
+          currentWidth = font.widthOfTextAtSize(text, fontSize);
+        } catch { currentWidth = 0; }
+        if (currentWidth <= 0) break;
+
+        const ratio = boxWidth / currentWidth;
+        const newSize = fontSize * ratio;
+        if (Math.abs(newSize - fontSize) / Math.max(fontSize, 1) < 0.01) {
+          fontSize = newSize;
+          break;
+        }
+        fontSize = newSize;
+      }
+
+      // Clamp so a bad bbox can't produce an absurd size.
+      const minSize = Math.max(1, boxHeight * 0.4);
+      const maxSize = Math.max(2, boxHeight * 2.5);
+      fontSize = Math.max(minSize, Math.min(fontSize, maxSize));
+
+      // ----- Baseline: places it at the bottom of the bbox. -----
+      const baselineY = boxBottomPdf;
+
+      try {
+        page.drawText(text, {
+          x: boxLeft,
+          y: baselineY,
+          font,
+          size: fontSize,
+          color: rgb(0, 0, 0),
+          opacity: 0,
+          rotate: rotation,
+        });
+        drawn++;
+      } catch (e) {
+        dropped++;
+      }
+    }
+  }
+
+  if (dropped > 0) {
+    console.warn(`[OCR] ${drawn} words drawn, ${dropped} dropped (font/encoding issue)`);
+  } else {
+    console.log(`[OCR] ${drawn} words drawn on this page`);
+  }
 }
 
-/**
- * Analyze a word's ink-height metrics relative to its em box.
- *
- * Tesseract's word bbox is the INK bounding box — the union of the pixels
- * of every glyph in the word. Its height therefore depends on which
- * characters the word contains:
- *
- *   • Words with full ascenders or capitals (b d f h k l, A-Z) —
- *     ink top is at the ascender height, roughly 0.72 em above the baseline.
- *   • Words with only x-height letters (a c e i m n o r s u v w x z) —
- *     ink top is at the x-height, roughly 0.52 em above the baseline.
- *   • Words with descenders (g j p q y) — ink bottom extends to roughly
- *     0.21 em below the baseline.
- *
- * Deriving the em size directly from the bbox height (the previous
- * implementation) caused the invisible text — and therefore the selection
- * quad — to be much smaller than the visible glyphs, because the em box
- * was never accounted for. This function returns the correct ratios so the
- * em size can be recovered from the ink height.
- *
- * @param {string} word
- * @returns {{ topRatio: number, bottomRatio: number, inkRatio: number }}
- */
-function analyzeWordInkMetrics(word) {
-  const w = String(word || '');
-  const lower = w.toLowerCase();
-
-  // Full-height characters: b d f h k l plus every uppercase letter.
-  const hasFullAscender = /[bdfhkl]/.test(lower) || /[A-Z]/.test(w);
-
-  // Partial-height characters: t (short ascender ~0.63 em), i/j dots (~0.70 em).
-  const hasSemiAscender = /[ti]/.test(lower) || /[j]/.test(lower);
-
-  // Descenders: g j p q y.
-  const hasDescender = /[gjpqy]/.test(lower);
-
-  let topRatio;
-  if (hasFullAscender) topRatio = 0.72;
-  else if (hasSemiAscender) topRatio = 0.66;
-  else topRatio = 0.52;
-
-  const bottomRatio = hasDescender ? 0.21 : 0;
-
-  return { topRatio, bottomRatio, inkRatio: topRatio + bottomRatio };
-}
-
-/**
- * Genuine In-Browser WebAssembly OCR Engine with Granular Real-Time Progress
- * Tracking, matching BentoPDF's algorithm and output quality:
- *
- *   • Renders the page at a user-selected DPI (192 / 288 / 384).
- *   • Optional binarization and character whitelist for accuracy tuning.
- *   • Embeds the rendered page as a LOSSLESS PNG (not JPEG) so no visible
- *     compression artifacts are introduced.
- *   • Stamps each recognized word as a single text-showing operation using
- *     the PDF text operators BT / Tf / Tz / Td / Tj / ET, with:
- *        – font size derived from the word's ink-height metrics (see
- *          analyzeWordInkMetrics) so the invisible em box matches the
- *          visible glyphs;
- *        – baseline placed at the correct position for the word's ascender
- *          and descender composition;
- *        – horizontal scaling (Tz) so the run's natural width matches the
- *          OCR bbox width exactly;
- *        – invisible rendering mode 3 (Tr 3) — the specification-sanctioned
- *          way to hide text while keeping it fully searchable, selectable,
- *          and extractable in every PDF viewer, including Adobe Acrobat.
- *
- * @param {File} file
- * @param {Object} options
- *   language      — Tesseract language code (default 'eng')
- *   onProgress    — progress callback
- *   outputMode    — 'searchable_pdf' | 'text'
- *   dpiPreset     — 'standard' | 'high' | 'ultra'   (default 'high')
- *   charWhitelist — allowed-character string (empty = all)
- *   binarize      — boolean, apply black/white threshold before OCR
- */
+// ---------------------------------------------------------------------------
+// Main OCR entry point.
+// ---------------------------------------------------------------------------
 export async function performPdfOcr(file, options = {}) {
   const {
     language = 'eng',
@@ -2013,7 +2207,7 @@ export async function performPdfOcr(file, options = {}) {
   }
 
   const arrayBuffer = await file.arrayBuffer();
-  const pdfJsDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pdfJsDoc = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
   const totalPages = pdfJsDoc.numPages;
 
   const dpi = OCR_DPI_PRESETS[dpiPreset] || OCR_DPI_PRESETS.high;
@@ -2021,7 +2215,7 @@ export async function performPdfOcr(file, options = {}) {
 
   let currentPageNum = 1;
 
-  onProgress({ status: 'Loading OCR Engine & Models...', percent: 5 });
+  onProgress({ status: 'Loading OCR engine…', percent: 5 });
 
   const worker = await createWorker(language, 1, {
     logger: (m) => {
@@ -2030,16 +2224,13 @@ export async function performPdfOcr(file, options = {}) {
         const basePagePercent = 5 + (currentPageNum - 1) * pagePortion;
         const currentSubPercent = Math.round(basePagePercent + m.progress * pagePortion);
         onProgress({
-          status: `Scanning Page ${currentPageNum} of ${totalPages} (${Math.round(m.progress * 100)}%)...`,
-          percent: Math.min(95, currentSubPercent)
+          status: `Scanning page ${currentPageNum} of ${totalPages} (${Math.round(m.progress * 100)}%)…`,
+          percent: Math.min(95, currentSubPercent),
         });
       } else if (m && m.status && m.status.includes('loading')) {
-        onProgress({
-          status: `Loading language data (${m.status})...`,
-          percent: 8
-        });
+        onProgress({ status: `Loading language data (${m.status})…`, percent: 8 });
       }
-    }
+    },
   });
 
   if (charWhitelist && charWhitelist.length > 0) {
@@ -2050,46 +2241,66 @@ export async function performPdfOcr(file, options = {}) {
     }
   }
 
+  // Load the source PDF for page copying. copyPages preserves the original
+  // vector / image content, so the output looks identical to the input.
+  const sourcePdfDoc = await PDFDocument.load(arrayBuffer.slice(0), { ignoreEncryption: true });
   const outputPdfDoc = await PDFDocument.create();
-  const helveticaFont = await outputPdfDoc.embedFont(StandardFonts.Helvetica);
-  let extractedFullText = '';
 
-  const opSave = PDFOperator.of('q');
-  const opRestore = PDFOperator.of('Q');
-  const opTrInvisible = PDFOperator.of('Tr', [PDFNumber.of(3)]);
-  const opTrVisible = PDFOperator.of('Tr', [PDFNumber.of(0)]);
+  // Try to embed a real Noto font. This is what gives app its accuracy
+  // for non-Latin scripts and wider glyph metrics.
+  let ocrFont = null;
+  try {
+    const fontkit = await getFontkit();
+    if (fontkit) {
+      outputPdfDoc.registerFontkit(fontkit);
+      const fontBytes = await getOcrFontBytesForLanguage(language);
+      ocrFont = await outputPdfDoc.embedFont(fontBytes, { subset: true });
+      console.log('[OCR] Embedded Noto font for language:', language);
+    }
+  } catch (e) {
+    console.warn('[OCR] Custom font load failed, falling back to Helvetica:', e);
+  }
+  if (!ocrFont) {
+    ocrFont = await outputPdfDoc.embedFont(StandardFonts.Helvetica);
+  }
+
+  // Copy every source page (preserves original content).
+  const sourcePageIndices = sourcePdfDoc.getPageIndices();
+  const copiedPages = await outputPdfDoc.copyPages(sourcePdfDoc, sourcePageIndices);
+  for (const p of copiedPages) outputPdfDoc.addPage(p);
+
+  let extractedFullText = '';
 
   try {
     for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
       currentPageNum = pageNum;
 
       onProgress({
-        status: `Rendering Page ${pageNum} of ${totalPages} at ${dpi} DPI...`,
-        percent: Math.round(5 + ((pageNum - 1) / totalPages) * 90)
+        status: `Rendering page ${pageNum} of ${totalPages} at ${dpi} DPI…`,
+        percent: Math.round(5 + ((pageNum - 1) / totalPages) * 90),
       });
 
-      const page = await pdfJsDoc.getPage(pageNum);
-      const viewport = page.getViewport({ scale: renderScale });
+      const srcPage = await pdfJsDoc.getPage(pageNum);
+      const outputPage = outputPdfDoc.getPage(pageNum - 1);
 
+      const viewport = srcPage.getViewport({ scale: renderScale });
       const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
       canvas.width = viewport.width;
       canvas.height = viewport.height;
-
-      // Fill white first so PNG has an opaque base (canvas defaults to
-      // transparent, and transparent PNGs are larger and can confuse some
-      // downstream OCR / indexing pipelines).
+      const ctx = canvas.getContext('2d');
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      await page.render({ canvasContext: ctx, viewport }).promise;
+      await srcPage.render({ canvasContext: ctx, viewport }).promise;
 
       if (binarize) {
         try { binarizeCanvasInPlace(canvas); } catch (_) {}
       }
 
+      // Request everything we might need: hOCR is the primary source for
+      // line/word placement, blocks and tsv are fallbacks.
       const { data } = await worker.recognize(canvas, {}, {
         text: true,
+        hocr: true,
         blocks: true,
         tsv: true,
       });
@@ -2097,161 +2308,53 @@ export async function performPdfOcr(file, options = {}) {
       extractedFullText += `--- Page ${pageNum} ---\n` + (data.text || '') + '\n\n';
 
       if (outputMode === 'searchable_pdf') {
-        // ------------------------------------------------------------------
-        // PIXEL QUALITY FIX
-        //
-        // The page image is embedded as a LOSSLESS PNG. JPEG (even at 0.95
-        // quality) introduces 8×8 block artifacts that are especially
-        // destructive on crisp vector text and logos, and those artifacts
-        // persist through every subsequent render. PNG preserves the
-        // rasterized page exactly as pdf.js produced it, so the visible
-        // output is identical to the source.
-        // ------------------------------------------------------------------
-        const imgBytes = await new Promise((resolve, reject) => {
-          canvas.toBlob((blob) => {
-            if (!blob) { reject(new Error('Canvas toBlob returned null')); return; }
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsArrayBuffer(blob);
-          }, 'image/png');
-        });
-        const embeddedImg = await outputPdfDoc.embedPng(imgBytes);
+        const pdfW = outputPage.getWidth();
+        const pdfH = outputPage.getHeight();
 
-        const pdfPageW = viewport.width / renderScale;
-        const pdfPageH = viewport.height / renderScale;
-        const newPage = outputPdfDoc.addPage([pdfPageW, pdfPageH]);
+        let hocr = null;
+        const hocrText = typeof data.hocr === 'string' ? data.hocr : '';
 
-        newPage.drawImage(embeddedImg, {
-          x: 0,
-          y: 0,
-          width: pdfPageW,
-          height: pdfPageH,
-        });
-
-        let tesseractWords = extractTesseractWords(data);
-        let source = 'blocks';
-        if (tesseractWords.length === 0 && data.tsv) {
-          tesseractWords = parseTesseractTsv(data.tsv);
-          source = 'tsv';
+        if (hocrText) {
+          hocr = parseHocr(hocrText);
+          if (hocr.lines.length > 0) {
+            // hOCR bboxes are in canvas pixel space. If the page element
+            // gave us dimensions, use those; otherwise use the canvas size
+            // (they match because we rendered at that exact scale).
+            if (hocr.width <= 0 || hocr.height <= 0) {
+              hocr.width = canvas.width;
+              hocr.height = canvas.height;
+            }
+            scaleHocrToPdfPage(hocr, pdfW, pdfH);
+          }
         }
 
-        console.log(
-          `[OCR] Page ${pageNum}: ${tesseractWords.length} words extracted ` +
-          `(source=${source}, dpi=${dpi})`
-        );
-
-        if (tesseractWords.length > 0) {
-          let fontKey = null;
-          try {
-            fontKey = newPage.node.newFontDictionary(helveticaFont.name, helveticaFont.ref);
-          } catch (regErr) {
-            console.warn('[OCR] Font registration failed, falling back to drawText:', regErr);
+        // Fallback: reconstruct lines from the blocks tree.
+        if (!hocr || hocr.lines.length === 0) {
+          const words = extractTesseractWords(data);
+          if (words.length > 0) {
+            const lines = groupWordsIntoLines(words);
+            hocr = { width: canvas.width, height: canvas.height, lines };
+            scaleHocrToPdfPage(hocr, pdfW, pdfH);
+            console.log(`[OCR] Page ${pageNum}: using blocks fallback (${words.length} words)`);
           }
+        }
 
-          const scaleX = pdfPageW / canvas.width;
-          const scaleY = pdfPageH / canvas.height;
-
-          newPage.pushOperators(opSave, opTrInvisible);
-
-          for (const w of tesseractWords) {
-            const wordText = (w.text || '').trim();
-            if (!wordText) continue;
-            const bbox = w.bbox;
-            if (!bbox) continue;
-
-            // Map bbox from canvas pixels to PDF points.
-            const boxLeft = bbox.x0 * scaleX;
-            const boxTopPdf = pdfPageH - bbox.y0 * scaleY;
-            const boxBottomPdf = pdfPageH - bbox.y1 * scaleY;
-            const boxWidth = (bbox.x1 - bbox.x0) * scaleX;
-            const boxHeight = (bbox.y1 - bbox.y0) * scaleY;
-
-            if (boxWidth <= 0 || boxHeight <= 0) continue;
-
-            // --------------------------------------------------------------
-            // ALIGNMENT FIX
-            //
-            // The OCR bbox is the INK bounding box. Its height depends on
-            // which characters the word contains. To make the invisible text
-            // render at the correct em size, we derive the em height from
-            // the ink composition:
-            //
-            //   fontSize = boxHeight / inkRatio
-            //
-            // Then we place the baseline so the invisible em box lines up
-            // with the visible glyphs:
-            //
-            //   baselineY = boxTop - topRatio * fontSize
-            //
-            // This makes the selection quad (which Acrobat derives from the
-            // font's ascent/descent) track the visible glyphs exactly.
-            // --------------------------------------------------------------
-            const { topRatio, inkRatio } = analyzeWordInkMetrics(wordText);
-
-            const fontSize = boxHeight / Math.max(inkRatio, 0.1);
-            const baselineY = boxTopPdf - topRatio * fontSize;
-
-            // Horizontal scaling: match the word's natural advance width
-            // to the bbox width so the selection rectangle spans exactly
-            // the visible glyphs horizontally.
-            let naturalWidth = 0;
-            try {
-              naturalWidth = helveticaFont.widthOfTextAtSize(wordText, fontSize);
-            } catch (_) { naturalWidth = 0; }
-
-            let hScale = 100;
-            if (naturalWidth > 0 && boxWidth > 0) {
-              hScale = (boxWidth / naturalWidth) * 100;
-              // Clamp to a sane range to prevent pathological stretching
-              // when the bbox is obviously wrong.
-              if (hScale < 30) hScale = 30;
-              if (hScale > 300) hScale = 300;
-            }
-
-            if (fontKey) {
-              try {
-                newPage.pushOperators(
-                  PDFOperator.of('BT'),
-                  PDFOperator.of('Tf', [PDFName.of(fontKey), PDFNumber.of(fontSize)]),
-                  PDFOperator.of('Tz', [PDFNumber.of(hScale)]),
-                  PDFOperator.of('Td', [PDFNumber.of(boxLeft), PDFNumber.of(baselineY)]),
-                  PDFOperator.of('Tj', [PDFString.of(escapePdfLiteralString(wordText))]),
-                  PDFOperator.of('ET')
-                );
-              } catch (opErr) {
-                try {
-                  newPage.drawText(wordText, {
-                    x: boxLeft,
-                    y: baselineY,
-                    size: fontSize,
-                    font: helveticaFont,
-                    color: rgb(0, 0, 0),
-                  });
-                } catch (_) { /* skip word */ }
-              }
-            } else {
-              try {
-                newPage.drawText(wordText, {
-                  x: boxLeft,
-                  y: baselineY,
-                  size: fontSize,
-                  font: helveticaFont,
-                  color: rgb(0, 0, 0),
-                });
-              } catch (_) { /* skip word */ }
-            }
-          }
-
-          newPage.pushOperators(opTrVisible, opRestore);
+        if (hocr && hocr.lines.length > 0) {
+          drawInvisibleTextLayer(outputPage, hocr, pdfH, ocrFont);
+        } else {
+          console.warn(`[OCR] Page ${pageNum}: no text recognized`);
         }
       }
+
+      // Release canvas memory.
+      canvas.width = 0;
+      canvas.height = 0;
     }
   } finally {
-    await worker.terminate();
+    try { await worker.terminate(); } catch (_) {}
   }
 
-  onProgress({ status: 'Finalizing PDF...', percent: 98 });
+  onProgress({ status: 'Finalizing PDF…', percent: 98 });
 
   const baseName = file.name.replace(/\.[^/.]+$/, '');
 
@@ -2261,7 +2364,7 @@ export async function performPdfOcr(file, options = {}) {
       blob: new Blob([extractedFullText], { type: 'text/plain;charset=utf-8' }),
       filename: `${baseName}_ocr.txt`,
       originalSize: file.size,
-      compressedSize: extractedFullText.length
+      compressedSize: extractedFullText.length,
     };
   }
 
@@ -2272,7 +2375,7 @@ export async function performPdfOcr(file, options = {}) {
     blob: new Blob([pdfBytes], { type: 'application/pdf' }),
     filename: `${baseName}_searchable.pdf`,
     originalSize: file.size,
-    compressedSize: pdfBytes.byteLength
+    compressedSize: pdfBytes.byteLength,
   };
 }
 
