@@ -14,6 +14,8 @@
     "deploy": "gh-pages -d dist"
   },
   "dependencies": {
+    "@embedpdf/pdfium": "^2.15.1",
+    "@embedpdf/react-pdf-viewer": "^2.15.1",
     "@pdf-lib/fontkit": "^1.1.1",
     "@tailwindcss/vite": "^4.3.3",
     "clsx": "^2.1.1",

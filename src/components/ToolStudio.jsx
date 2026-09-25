@@ -88,6 +88,7 @@ import {
   performPdfOcr,
   OCR_WHITELIST_PRESETS,
 } from '../utils/pdfWorker';
+import PdfiumEditStudio from './PdfiumEditStudio';
 import EditPdfStudio from './EditPdfStudio';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
@@ -1416,8 +1417,19 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
   const isFormsStudio = tool?.id === 'forms' && !result;
 
-    // --- Edit PDF uses its own dedicated studio ---
+  // --- Edit PDF uses the PDFium-backed annotation editor ---
   if (tool?.id === 'edit') {
+    return (
+      <PdfiumEditStudio
+        tool={tool}
+        file={files[0]}
+        onBack={onBack}
+      />
+    );
+  }
+
+  // --- Edit PDF Text uses the PyMuPDF-backed in-place text editor ---
+  if (tool?.id === 'edit-text') {
     return (
       <EditPdfStudio
         tool={tool}

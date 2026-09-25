@@ -56,16 +56,16 @@ export default function App() {
   // Tool click handler — block "edit" on phones
   // -------------------------------------------------------------------------
   const handleToolSelect = (tool) => {
-    if (tool.id === 'edit' && isPhoneDevice()) {
+    if ((tool.id === 'edit' || tool.id === 'edit-text') && isPhoneDevice()) {
       setShowMobileBlock(true);
       return;
     }
     setActiveModalTool(tool);
   };
 
-  const handleLaunchStudio = (tool, sessionData) => {
-    // Double-check mobile block for 'edit' at launch time (belt + suspenders)
-    if (tool.id === 'edit' && isPhoneDevice()) {
+    const handleLaunchStudio = (tool, sessionData) => {
+    // Double-check mobile block for editing tools (belt + suspenders)
+    if ((tool.id === 'edit' || tool.id === 'edit-text') && isPhoneDevice()) {
       setActiveModalTool(null);
       setShowMobileBlock(true);
       return;

@@ -164,6 +164,66 @@ function getRealFontName(page, fontId) {
   } catch { return null; }
 }
 
+/**
+ * Read the OS/2 table's fsSelection flags from a TrueType/OpenType font
+ * buffer. Returns true when the font genuinely declares itself bold or
+ * italic, regardless of what its name string says.
+ *
+ * This is the same technique Acrobat, PDFium and PyMuPDF use internally.
+ * Without it, subsetted fonts (which frequently have neutral names) are
+ * mis-detected as non-bold / non-italic 
+ *
+ * @param {ArrayBuffer|Uint8Array|null} buffer  Raw font bytes from pdf.js
+ *   (page.commonObjs.get(fontId).data).
+ * @returns {{ isBold: boolean, isItalic: boolean } | null}
+ */
+function readOS2Flags(buffer) {
+  try {
+    if (!buffer) return null;
+    const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+    // 1. Read sfnt version (4 bytes) — 0x00010000 for TrueType, "OTTO" for CFF.
+    const version = view.getUint32(0, false);
+    const isTTF = version === 0x00010000 || version === 0x74727565; // 'true'
+    const isOTTO = version === 0x4F54544F;                          // 'OTTO'
+    if (!isTTF && !isOTTO) return null;
+
+    // 2. Read numTables and iterate the table directory (starts at offset 12).
+    const numTables = view.getUint16(4, false);
+    let os2Offset = -1;
+    let os2Length = 0;
+    for (let i = 0; i < numTables; i++) {
+      const base = 12 + i * 16;
+      const tag = String.fromCharCode(
+        view.getUint8(base),
+        view.getUint8(base + 1),
+        view.getUint8(base + 2),
+        view.getUint8(base + 3)
+      );
+      if (tag === 'OS/2') {
+        os2Offset = view.getUint32(base + 8, false);
+        os2Length = view.getUint32(base + 12, false);
+        break;
+      }
+    }
+    // Some subsetted fonts strip OS/2 — return null so the caller falls
+    // back to the name-based heuristic.
+    if (os2Offset < 0 || os2Offset + 64 > bytes.length) return null;
+    if (os2Length < 64) return null;
+
+    // 3. fsSelection lives at byte offset 62 in the OS/2 table (2 bytes).
+    const fsSelection = view.getUint16(os2Offset + 62, false);
+
+    return {
+      isItalic: (fsSelection & 0x01) !== 0, // bit 0
+      isBold:   (fsSelection & 0x20) !== 0, // bit 5
+    };
+  } catch {
+    return null;
+  }
+}
+
 function rgbToCss(rgb) {
   return `rgb(${Math.round(rgb[0] * 255)}, ${Math.round(rgb[1] * 255)}, ${Math.round(rgb[2] * 255)})`;
 }
@@ -1092,6 +1152,21 @@ export default function EditPdfStudio({ tool, file, onBack }) {
           const realFontName = getRealFontName(page, item.fontName);
           const rawFont = realFontName || styleInfo.fontFamily || item.fontName || 'Helvetica';
           const fallback = parseFontFallback(rawFont);
+
+          // OS/2-aware bold/italic detection. Falls back to the name-based guess
+          // when the OS/2 table is absent (rare) or unreadable.
+          let os2 = null;
+          try {
+            const fontObj = page.commonObjs?.has?.(item.fontName)
+              ? page.commonObjs.get(item.fontName)
+              : null;
+            if (fontObj?.data) os2 = readOS2Flags(fontObj.data);
+          } catch { /* ignore */ }
+
+          if (os2) {
+            fallback.isBold = os2.isBold;
+            fallback.isItalic = os2.isItalic;
+          }
           const cssFontStack = `"${item.fontName}", ${fallback.family}`;
           const yBaselineTopDownPdf = viewY1 - pdfYBaseline;
           const span = {

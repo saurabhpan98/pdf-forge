@@ -638,7 +638,8 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
                        align='left', underline=False, strike=False,
                        superscript=False, subscript=False,
                        char_spacing=0.0, h_scale=1.0,
-                       outline_color=None, outline_width=0.0):
+                       outline_color=None, outline_width=0.0,
+                       bold=None, italic=None):
     original_size = float(font_size)
     text = str(text)
 
@@ -657,8 +658,18 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
     color = (float(color[0]), float(color[1]), float(color[2]))
     use_char_spacing = abs(char_spacing) > 0.01
 
-    bold_flag = bool(font_name and 'bold' in font_name.lower())
-    italic_flag = bool(font_name and 'italic' in font_name.lower())
+        # Prefer explicit flags from the client (which now come from the font's
+    # real OS/2 fsSelection bits). Fall back to name-based inference only
+    # when the client did not supply a value — this preserves behaviour
+    # for any caller that hasn't been updated yet.
+    if bold is not None:
+        bold_flag = bool(bold)
+    else:
+        bold_flag = bool(font_name and 'bold' in font_name.lower())
+    if italic is not None:
+        italic_flag = bool(italic)
+    else:
+        italic_flag = bool(font_name and 'italic' in font_name.lower())
 
     log(f"  [_insert_text_span] text='{text[:30]}' "
         f"color=({color[0]:.3f},{color[1]:.3f},{color[2]:.3f}) "
@@ -1289,6 +1300,8 @@ def perform_edits(input_path, output_path, edits, additions):
                     h_scale=float(e.get('hScale', 100) or 100) / 100.0,
                     outline_color=e.get('outlineColor'),
                     outline_width=float(e.get('outlineWidth', 0) or 0),
+                    bold=e.get('bold'),
+                    italic=e.get('italic'),
                 )
 
         for a in page_additions:
@@ -1329,6 +1342,8 @@ def perform_edits(input_path, output_path, edits, additions):
                         h_scale=float(a.get('hScale', 100) or 100) / 100.0,
                         outline_color=a.get('outlineColor'),
                         outline_width=float(a.get('outlineWidth', 0) or 0),
+                        bold=bool(a.get('bold')),
+                        italic=bool(a.get('italic')),
                     )
 
                 elif a_type == 'shape':
