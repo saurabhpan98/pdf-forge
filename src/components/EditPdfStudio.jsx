@@ -11,6 +11,11 @@ import {
 import * as pdfjsLib from 'pdfjs-dist';
 import { editPdfText, checkPdfPassword } from '../utils/pdfWorker';
 import TextFormatSidebar from './TextFormatSidebar';
+import {
+  readPageWords,
+  matchSpanToWords,
+  terminatePageOcrWorker,
+} from '../utils/pageOcrReader';
 
 if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
   pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -171,7 +176,7 @@ function getRealFontName(page, fontId) {
  *
  * This is the same technique Acrobat, PDFium and PyMuPDF use internally.
  * Without it, subsetted fonts (which frequently have neutral names) are
- * mis-detected as non-bold / non-italic 
+ * mis-detected as non-bold / non-italic.
  *
  * @param {ArrayBuffer|Uint8Array|null} buffer  Raw font bytes from pdf.js
  *   (page.commonObjs.get(fontId).data).
@@ -878,10 +883,15 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   const drawingRectRef = useRef(null);
   const freehandPathRef = useRef(null);
   const freehandActiveRef = useRef(false);
+    const renderedCanvasRef = useRef(null);
 
-  // ---- Render deduplication refs (FIX) ----
+  // ---- Render deduplication refs ----
   const lastRenderKeyRef = useRef('');
   const renderInFlightRef = useRef(false);
+
+  // ---- Background whole-page OCR cache ----
+  const pageOcrWordsRef = useRef(new Map());     // cacheKey -> Array<Word>
+  const [ocrPreparing, setOcrPreparing] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [rendering, setRendering] = useState(false);
@@ -954,6 +964,9 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     setActiveStyle(emptyActiveStyle());
     setRendering(false);
     setPageDataUrl('');
+    renderedCanvasRef.current = null;
+    pageOcrWordsRef.current = new Map();
+    setOcrPreparing(false);
     lastRenderKeyRef.current = '';
     renderInFlightRef.current = false;
   }, [file]);
@@ -1110,8 +1123,10 @@ export default function EditPdfStudio({ tool, file, onBack }) {
         renderTask = null;
         if (cancelled) return;
 
+        renderedCanvasRef.current = canvas;
         setPageDataUrl(canvas.toDataURL('image/jpeg', 0.92));
         setPageDims({ width: vp.width, height: vp.height });
+
 
         const tc = await page.getTextContent();
         if (cancelled) return;
@@ -1153,8 +1168,8 @@ export default function EditPdfStudio({ tool, file, onBack }) {
           const rawFont = realFontName || styleInfo.fontFamily || item.fontName || 'Helvetica';
           const fallback = parseFontFallback(rawFont);
 
-          // OS/2-aware bold/italic detection. Falls back to the name-based guess
-          // when the OS/2 table is absent (rare) or unreadable.
+          // OS/2-aware bold/italic detection. Falls back to the name-based
+          // guess when the OS/2 table is absent (rare) or unreadable.
           let os2 = null;
           try {
             const fontObj = page.commonObjs?.has?.(item.fontName)
@@ -1209,6 +1224,85 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, loadFailed, currentPage, zoom, result]);
+
+  // ---------------------------------------------------------------------------
+  // Background whole-page OCR
+  //
+  // Renders the page at a FIXED high scale (independent of the display zoom)
+  // and runs Tesseract over it. Results are cached per (file, page) — never
+  // per zoom, because OCR quality doesn't improve by re-running it every
+  // time the user zooms the viewport.
+  //
+  // The OCR canvas is separate from the display canvas, so it is not
+  // affected by layout, zoom, or the user's viewport. This is also why
+  // we no longer depend on `renderedCanvasRef`.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (loading || loadFailed || result) return;
+    if (!pdfDocRef.current) return;
+
+    const pageNum = currentPage;
+    const cacheKey = `${file?.name || 'f'}|${pageNum}`;
+
+    // Already cached (null = in-flight, [] = done but nothing found, Array = done)
+    if (pageOcrWordsRef.current.has(cacheKey)) {
+      const cached = pageOcrWordsRef.current.get(cacheKey);
+      // If it's still in-flight, don't touch ocrPreparing — a different
+      // effect instance owns it.
+      if (cached === null) return;
+      return;
+    }
+
+    // Mark as in-flight BEFORE anything async so that even if the user
+    // switches zoom or page immediately, we won't start a second job.
+    pageOcrWordsRef.current.set(cacheKey, null);
+    setOcrPreparing(true);
+
+    let cancelled = false;
+    (async () => {
+      let words = [];
+      try {
+        // Render a dedicated OCR canvas at a fixed high scale. 2.5 gives
+        // Tesseract character heights in the sweet spot (30–60 px) for
+        // typical A4/Letter pages without exploding memory.
+        const OCR_SCALE = 2.5;
+        const page = await pdfDocRef.current.getPage(pageNum);
+        const vp = page.getViewport({ scale: OCR_SCALE });
+        const ocrCanvas = document.createElement('canvas');
+        ocrCanvas.width = Math.ceil(vp.width);
+        ocrCanvas.height = Math.ceil(vp.height);
+        const ctx = ocrCanvas.getContext('2d');
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, ocrCanvas.width, ocrCanvas.height);
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+
+        words = await readPageWords(ocrCanvas, cacheKey);
+        console.log(
+          '[EditPdfStudio] Background OCR complete:',
+          (words || []).length,
+          'words for',
+          cacheKey
+        );
+      } catch (err) {
+        console.warn('[EditPdfStudio] Background OCR failed:', err);
+      } finally {
+        // Store the result whether success or failure.
+        pageOcrWordsRef.current.set(cacheKey, words || []);
+        // Only reset the pill if this effect instance still owns the "active"
+        // job. If a newer page started OCR, that one has already set
+        // ocrPreparing(true) again — and it's up to that job to reset it.
+        if (!cancelled) setOcrPreparing(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, loadFailed, currentPage, result, file]);
+
+  // Terminate the OCR worker when the editor unmounts.
+  useEffect(() => {
+    return () => { terminatePageOcrWorker(); };
+  }, []);
 
   // Toolbar position — text span
   useEffect(() => {
@@ -1284,6 +1378,11 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     };
   }, [selectedAdditionId, additions, viewportTransform, pageView, zoom]);
 
+  // ---------------------------------------------------------------------------
+  // beginEdit — uses the background OCR result to pre-fill the edit box with
+  // the text the user actually sees, rather than pdf.js's ToUnicode-based
+  // (and often incorrect) extraction.
+  // ---------------------------------------------------------------------------
   const beginEdit = (span) => {
     if (selectedId && selectedId !== span.id) commitEdit();
     setSelectedAdditionId(null);
@@ -1291,6 +1390,8 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     setSelectedId(span.id);
     const existing = edits[span.id];
     if (existing) {
+      // Reopen an existing edit — restore the user's previous draft, not a
+      // freshly-derived value.
       setDraftText(existing.newText);
       setActiveStyle({
         fontFamily: existing.overrideFontFamily ?? null,
@@ -1314,7 +1415,23 @@ export default function EditPdfStudio({ tool, file, onBack }) {
         offsetY: existing.offsetY ?? 0,
       });
     } else {
-      setDraftText(span.text);
+      // Prefer the OCR-derived text when available. It matches what the user
+      // sees on the page, whereas span.text is pdf.js's ToUnicode-based guess
+      // and can be wrong for subsetted fonts.
+            // Cache key no longer includes zoom — see the OCR effect above.
+      const cacheKey = `${file?.name || 'f'}|${currentPage}`;
+      const ocrWords = pageOcrWordsRef.current.get(cacheKey);
+      let initialText = span.text;
+      if (Array.isArray(ocrWords) && ocrWords.length > 0) {
+        // The OCR words are in canvas coordinates from a fixed 2.5× render,
+        // while the span's canvasX/canvasYBaseline are in the *display*
+        // canvas's coordinates. Normalise: OCR coords × (zoom / 2.5) gives
+        // the position in the display canvas.
+        const zoomScale = (zoom || 1) / 2.5;
+        const matched = matchSpanToWords(ocrWords, span, zoomScale);
+        if (matched) initialText = matched;
+      }
+      setDraftText(initialText);
       setActiveStyle({
         fontFamily: null,
         detectedFontFamily: span.detectedFamily ?? null,
@@ -2119,6 +2236,13 @@ export default function EditPdfStudio({ tool, file, onBack }) {
           </div>
         )}
 
+        {ocrPreparing && !loading && !loadFailed && (
+          <div className="shrink-0 px-2.5 py-1 bg-blue-50 border border-blue-200 rounded-2xl text-[10px] text-blue-800 flex items-center space-x-1.5 self-start">
+            <Loader2 className="w-3 h-3 animate-spin text-blue-600" />
+            <span className="font-semibold">Reading page text for accurate editing…</span>
+          </div>
+        )}
+
         {!loading && !loadFailed && (
           <div className="shrink-0 bg-white border border-slate-200 rounded-2xl px-3 py-2 flex items-center justify-start">
             <ToolsBar
@@ -2522,7 +2646,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                                     nw: '-top-1.5 -left-1.5 cursor-nwse-resize',
                                     ne: '-top-1.5 -right-1.5 cursor-nesw-resize',
                                     sw: '-bottom-1.5 -left-1.5 cursor-nesw-resize',
-                                    se: '-bottom-1.5 -right-1.5 cursor-nwse-resize',
+                                    se: '-bottom-1.5 -right-1.5 cursor-nesw-resize',
                                   }[h];
                                   return (
                                     <div key={h}
