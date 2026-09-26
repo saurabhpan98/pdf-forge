@@ -374,6 +374,85 @@ function sampleSpanColor(ctx, span) {
   } catch { return [0, 0, 0]; }
 }
 
+/**
+ * Sample the background colour behind a text span — the pixels just above
+ * the cap height and just below the baseline, i.e. away from glyph strokes.
+ * Uses 32-level bucketing and returns the MODE so gradients and edges don't
+ * skew the result toward an outlier.
+ */
+function sampleBackgroundColor(ctx, span) {
+  const cx = Math.round(span.canvasX + span.widthPx * 0.5);
+  const patch = 3;
+  const rows = [
+    Math.round(span.canvasYBaseline - span.fontPx * 1.05),
+    Math.round(span.canvasYBaseline + span.fontPx * 0.28),
+  ];
+  const samples = [];
+  for (const py of rows) {
+    if (py < 0 || py >= ctx.canvas.height) continue;
+    const px = Math.max(0, Math.min(ctx.canvas.width - patch, cx - (patch >> 1)));
+    try {
+      const d = ctx.getImageData(px, py, patch, patch).data;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2], a = d[i + 3];
+        if (a < 40) continue;
+        if (r + g + b < 120) continue; // likely text ink or border
+        samples.push([r, g, b]);
+      }
+    } catch { /* ignore */ }
+  }
+  if (samples.length === 0) return [1, 1, 1];
+  const buckets = new Map();
+  for (const [r, g, b] of samples) {
+    const key = `${r >> 5},${g >> 5},${b >> 5}`;
+    const e = buckets.get(key) || { count: 0, r: 0, g: 0, b: 0 };
+    e.count++; e.r += r; e.g += g; e.b += b;
+    buckets.set(key, e);
+  }
+  let best = null;
+  for (const e of buckets.values()) if (!best || e.count > best.count) best = e;
+  return [best.r / best.count / 255, best.g / best.count / 255, best.b / best.count / 255];
+}
+
+/**
+ * True when the text contains Private-Use-Area glyphs, replacement chars,
+ * C1 controls, or NUL — the four families that PyMuPDF silently corrupts
+ * into arbitrary ASCII when a font can't encode them.
+ */
+function containsBrokenChars(text) {
+  if (!text) return false;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0);
+    if ((cp >= 0xE000 && cp <= 0xF8FF) ||
+        cp === 0xFFFD ||
+        (cp >= 0x0080 && cp <= 0x009F) ||
+        cp === 0x0000) {
+      return true;
+    }
+  }
+  return false;
+}
+
+
+/**
+ * True if pdf.js's extracted text is likely garbled (broken ToUnicode
+ * CMap, private-use-area glyphs, C1 controls, replacement chars).
+ */
+function looksLikeBrokenPdfJsText(text) {
+  if (!text) return true;
+  let broken = 0;
+  for (const ch of text) {
+    const code = ch.codePointAt(0);
+    if ((code >= 0xE000 && code <= 0xF8FF) ||  // private use area
+        code === 0xFFFD ||                     // replacement char
+        (code >= 0x0080 && code <= 0x009F) ||  // C1 controls
+        code === 0x0000) {
+      broken++;
+    }
+  }
+  return broken / text.length > 0.1;
+}
+
 function TextEditBox({ initialText, style, onInput, onCommit, onCancel, onMouseDownInternal }) {
   const ref = useRef(null);
   const committedRef = useRef(false);
@@ -788,7 +867,7 @@ function colorsEqual(a, b) {
   );
 }
 
-function buildEdit(span, draftText, activeStyle) {
+function buildEdit(span, draftText, activeStyle, originalDisplayText) {
   const eff = getEffectiveStyle(span, activeStyle);
   const originalBbox = [
     span.pdfX,
@@ -814,12 +893,29 @@ function buildEdit(span, draftText, activeStyle) {
 
   if (nothingChanged) return null;
 
+  // If the pdf.js text was broken (PUA) and the user left the draft empty,
+  // treat it as "no change" — we don't want to silently delete unreadable
+  // text just because the user clicked and clicked away.
+  if (
+    draftText === '' &&
+    span.text &&
+    span.text.trim() !== '' &&
+    containsBrokenChars(span.text) &&
+    !familyExplicit && !sizeChanged && !boldChanged && !italicChanged && !colorChanged &&
+    !activeStyle.underline && !activeStyle.strike &&
+    eff.offsetX === 0 && eff.offsetY === 0
+  ) {
+    return null;
+  }
+
   return {
     page: span.page,
     bbox: originalBbox,
     offsetX: eff.offsetX,
     offsetY: eff.offsetY,
     originalText: span.text,
+    originalDisplayText: originalDisplayText || span.text,
+    bgColor: span.bgColor || [1, 1, 1],
     newText: String(draftText),
     fontName: composeBackendFontName(span, activeStyle),
     originalFontName: span.fontRaw,
@@ -915,6 +1011,10 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   const [selectedId, setSelectedId] = useState(null);
   const [draftText, setDraftText] = useState('');
   const [activeStyle, setActiveStyle] = useState(emptyActiveStyle());
+
+  // Per-span, the text the user actually SAW (OCR-derived when pdf.js
+  // extraction is broken). Used only for display in the sidebar.
+  const originalDisplayRef = useRef({});
 
   const [additions, setAdditions] = useState([]);
   const [selectedAdditionId, setSelectedAdditionId] = useState(null);
@@ -1196,6 +1296,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
             cssFont: cssFontStack, color: [0, 0, 0],
           };
           span.color = sampleSpanColor(ctx, span);
+          span.bgColor = sampleBackgroundColor(ctx, span);
           extracted.push(span);
         }
         if (cancelled) return;
@@ -1383,16 +1484,16 @@ export default function EditPdfStudio({ tool, file, onBack }) {
   // the text the user actually sees, rather than pdf.js's ToUnicode-based
   // (and often incorrect) extraction.
   // ---------------------------------------------------------------------------
-  const beginEdit = (span) => {
+    const beginEdit = (span) => {
     if (selectedId && selectedId !== span.id) commitEdit();
     setSelectedAdditionId(null);
     setEditingAdditionId(null);
     setSelectedId(span.id);
+
     const existing = edits[span.id];
     if (existing) {
-      // Reopen an existing edit — restore the user's previous draft, not a
-      // freshly-derived value.
       setDraftText(existing.newText);
+      originalDisplayRef.current[span.id] = existing.originalDisplayText || span.text;
       setActiveStyle({
         fontFamily: existing.overrideFontFamily ?? null,
         detectedFontFamily: span.detectedFamily ?? null,
@@ -1414,38 +1515,68 @@ export default function EditPdfStudio({ tool, file, onBack }) {
         offsetX: existing.offsetX ?? 0,
         offsetY: existing.offsetY ?? 0,
       });
-    } else {
-      // Prefer the OCR-derived text when available. It matches what the user
-      // sees on the page, whereas span.text is pdf.js's ToUnicode-based guess
-      // and can be wrong for subsetted fonts.
-            // Cache key no longer includes zoom — see the OCR effect above.
+      return;
+    }
+
+    const pdfJsBroken = containsBrokenChars(span.text);
+
+    // Try OCR only if pdf.js is unusable.
+    let ocrText = null;
+    let ocrConfidence = 0;
+    if (pdfJsBroken) {
       const cacheKey = `${file?.name || 'f'}|${currentPage}`;
       const ocrWords = pageOcrWordsRef.current.get(cacheKey);
-      let initialText = span.text;
       if (Array.isArray(ocrWords) && ocrWords.length > 0) {
-        // The OCR words are in canvas coordinates from a fixed 2.5× render,
-        // while the span's canvasX/canvasYBaseline are in the *display*
-        // canvas's coordinates. Normalise: OCR coords × (zoom / 2.5) gives
-        // the position in the display canvas.
         const zoomScale = (zoom || 1) / 2.5;
         const matched = matchSpanToWords(ocrWords, span, zoomScale);
-        if (matched) initialText = matched;
+        if (matched && matched.text && !containsBrokenChars(matched.text)) {
+          ocrText = matched.text;
+          ocrConfidence = matched.avgConfidence;
+        }
       }
-      setDraftText(initialText);
-      setActiveStyle({
-        fontFamily: null,
-        detectedFontFamily: span.detectedFamily ?? null,
-        fontSize: span.pdfFontSize,
-        bold: span.isBold,
-        italic: span.isItalic,
-        underline: false, strike: false,
-        superscript: false, subscript: false,
-        color: span.color,
-        align: 'left',
-        lineSpacing: null, charSpacing: null, hScale: null,
-        outlineColor: null, outlineWidth: 0,
-        direction: 'auto', offsetX: 0, offsetY: 0,
-      });
+    }
+
+    // Decide the initial draft text.
+    //   - pdf.js clean           → use it
+    //   - pdf.js broken, OCR good → use OCR (if confident enough)
+    //   - both bad               → start empty (user will retype)
+    let initialText;
+    let placeholderHint = null;
+    if (!pdfJsBroken) {
+      initialText = span.text;
+    } else if (ocrText && ocrConfidence >= 55) {
+      initialText = ocrText;
+    } else if (ocrText && ocrConfidence > 0) {
+      // Low-confidence OCR — use it as a starting point but warn the user.
+      initialText = ocrText;
+      placeholderHint = 'Check this — it may have been misread';
+    } else {
+      initialText = '';
+      placeholderHint = 'Original text was unreadable — type to replace';
+    }
+
+    setDraftText(initialText);
+    originalDisplayRef.current[span.id] = initialText || '(unreadable)';
+
+    setActiveStyle({
+      fontFamily: null,
+      detectedFontFamily: span.detectedFamily ?? null,
+      fontSize: span.pdfFontSize,
+      bold: span.isBold,
+      italic: span.isItalic,
+      underline: false, strike: false,
+      superscript: false, subscript: false,
+      color: span.color,
+      align: 'left',
+      lineSpacing: null, charSpacing: null, hScale: null,
+      outlineColor: null, outlineWidth: 0,
+      direction: 'auto', offsetX: 0, offsetY: 0,
+    });
+
+    if (placeholderHint) {
+      // Show a transient inline hint in the sidebar's selection label area.
+      setErrorMsg(placeholderHint);
+      window.setTimeout(() => setErrorMsg((m) => (m === placeholderHint ? '' : m)), 6000);
     }
   };
 
@@ -1479,7 +1610,10 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     if (!s.selectedId) return;
     const span = s.spans.find((x) => x.id === s.selectedId);
     if (!span) { setSelectedId(null); return; }
-    const editObj = buildEdit(span, s.draftText, s.activeStyle);
+    const editObj = buildEdit(
+      span, s.draftText, s.activeStyle,
+      originalDisplayRef.current[span.id]
+    );
     if (!editObj) {
       if (s.edits[span.id]) {
         setEdits((prev) => { const n = { ...prev }; delete n[span.id]; return n; });
@@ -1513,7 +1647,10 @@ export default function EditPdfStudio({ tool, file, onBack }) {
       [span.id]: {
         page: span.page, bbox: originalBbox,
         offsetX: eff.offsetX, offsetY: eff.offsetY,
-        originalText: span.text, newText: '',
+        originalText: span.text,
+        originalDisplayText: originalDisplayRef.current[span.id] || span.text,
+        bgColor: span.bgColor || [1, 1, 1],
+        newText: '',
         fontName: span.fontRaw, fontSize: span.pdfFontSize, color: span.color,
         align: 'left', underline: false, strike: false,
         superscript: false, subscript: false,
@@ -1562,7 +1699,10 @@ export default function EditPdfStudio({ tool, file, onBack }) {
     if (s.selectedId) {
       const span = s.spans.find((x) => x.id === s.selectedId);
       if (!span) return;
-      const editObj = buildEdit(span, s.draftText, newStyle);
+      const editObj = buildEdit(
+        span, s.draftText, newStyle,
+        originalDisplayRef.current[span.id]
+      );
       setEdits((prev) => {
         if (!editObj) {
           if (!prev[span.id]) return prev;
@@ -2314,9 +2454,20 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                       const origTop = span.canvasYBaseline - origBaseFromTop;
                       const origWidth = Math.max(span.widthPx, 12);
 
+                      const coverBg = span.bgColor || [1, 1, 1];
+                      const coverBgCss = `rgb(${Math.round(coverBg[0] * 255)},${Math.round(coverBg[1] * 255)},${Math.round(coverBg[2] * 255)})`;
                       const coverNode = (isSelected || isModified) && (
-                        <div key={`${span.id}-cover`} className="absolute z-20 bg-white rounded-[2px] pointer-events-none"
-                          style={{ left: `${origLeft - 3}px`, top: `${origTop - 3}px`, width: `${origWidth + 6}px`, height: `${origLineH + 6}px` }} />
+                        <div
+                          key={`${span.id}-cover`}
+                          className="absolute z-20 rounded-[2px] pointer-events-none"
+                          style={{
+                            left: `${origLeft - 3}px`,
+                            top: `${origTop - 3}px`,
+                            width: `${origWidth + 6}px`,
+                            height: `${origLineH + 6}px`,
+                            background: coverBgCss,
+                          }}
+                        />
                       );
 
                       const displayStyle = isSelected ? activeStyle : edit ? {
@@ -2868,7 +3019,7 @@ export default function EditPdfStudio({ tool, file, onBack }) {
                     {Object.entries(edits).filter(([, e]) => e.page === currentPage).map(([id, e]) => (
                       <div key={id} className="p-2 bg-slate-50 border border-slate-200 rounded-xl flex items-start justify-between gap-2 text-[11px]">
                         <div className="flex-1 min-w-0">
-                          <p className="text-slate-400 truncate">Was: {String(e.originalText ?? '')}</p>
+                                                    <p className="text-slate-400 truncate">Was: {String(e.originalDisplayText || e.originalText || '')}</p>
                           <p className="text-slate-800 font-semibold truncate">Now: {typeof e.newText === 'string' && e.newText ? e.newText : '∅ (deleted)'}</p>
                         </div>
                         <button onClick={() => revertEdit(id)} className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer shrink-0" title="Revert">

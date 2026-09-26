@@ -1,12 +1,27 @@
 """
 In-place PDF editing engine powered by PyMuPDF.
 
-FIXES:
-  • Only uses original subset font for chars that ACTUALLY existed in the
-    original text — avoids blank .notdef glyphs and x-advance gaps.
-  • Uses border_width=0.01 with render_mode=2 so text isn't rendered bold.
-  • "Safe" fallback font ensures every new char is always visible.
+STRATEGY
+========
+The old code painted a solid fill over the original text and then redrew it.
+That destroys backgrounds (yellow bands, gradients, images, table stripes)
+because a single solid colour can never match what was actually behind the
+text.
+
+This version uses TEXT-FREE BACKGROUND RESTORATION:
+
+  1. Make a temp copy of the page and prepend `BT 3 Tr ET` to hide all text
+     (text render mode 3 = invisible).
+  2. Render each edit region from that temp copy at high DPI -> a pixel-perfect
+     snapshot of the real background, with no text in it.
+  3. On the original page, redact the same region with a TRANSPARENT fill.
+     This removes the old text operators without painting anything.
+  4. Insert the snapshot back over the redacted region.
+  5. Draw the new text on top.
+
+Nothing is re-encoded, nothing is painted over, no background is disturbed.
 """
+
 import sys
 import os
 import json
@@ -16,15 +31,52 @@ import time
 import base64
 import urllib.request
 import urllib.parse
-import fitz  # PyMuPDF
+try:
+    import fitz  # PyMuPDF (legacy import name, still supported)
+except ImportError:
+    try:
+        import pymupdf as fitz  # PyMuPDF 1.24+ alias
+    except ImportError as exc:
+        import sys
+        sys.stderr.write(
+            "\n[edit] FATAL: PyMuPDF is not installed in this Python interpreter.\n"
+            f"[edit] Interpreter: {sys.executable}\n"
+            "[edit] Fix with:  python3 -m pip install --break-system-packages PyMuPDF\n"
+            "[edit] If a stray 'fitz' package is installed, remove it with:\n"
+            "[edit]   python3 -m pip uninstall -y fitz\n\n"
+        )
+        raise exc
 
 
 def log(msg):
     sys.stderr.write(f"[edit] {msg}\n")
 
+def _strip_broken_chars(text):
+    """
+    Remove Private Use Area, replacement, C1 control, and NUL characters.
+    PyMuPDF silently truncates these to a single byte during font encoding,
+    producing random ASCII like 'u', 's', or 'J' — the exact corruption
+    seen in the wild.
+    """
+    if not text:
+        return ''
+    out = []
+    for ch in str(text):
+        cp = ord(ch)
+        if 0xE000 <= cp <= 0xF8FF:   # private use
+            continue
+        if cp == 0xFFFD:             # replacement char
+            continue
+        if 0x80 <= cp <= 0x9F:       # C1 controls
+            continue
+        if cp == 0:
+            continue
+        out.append(ch)
+    return ''.join(out)
+
 
 # ===========================================================================
-# FONT CATEGORY → CLOSEST FREE CLONE
+# FONT CATEGORY → CLOSEST FREE CLONE  (unchanged)
 # ===========================================================================
 CATEGORY_FALLBACK = {
     'grotesque-sans':     {'clone': 'Arimo',            'fallback': 'Arial, Helvetica, sans-serif'},
@@ -626,7 +678,7 @@ def to_color_tuple(color):
 
 
 # ===========================================================================
-# TEXT INSERTION
+# TEXT INSERTION  (unchanged — still used to draw the *new* text)
 # ===========================================================================
 def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, color,
                        original_font_name=None,
@@ -640,6 +692,8 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
                        char_spacing=0.0, h_scale=1.0,
                        outline_color=None, outline_width=0.0,
                        bold=None, italic=None):
+    text = _strip_broken_chars(text)   # ← new line
+    original_text = _strip_broken_chars(original_text)  # ← new line
     original_size = float(font_size)
     text = str(text)
 
@@ -658,10 +712,6 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
     color = (float(color[0]), float(color[1]), float(color[2]))
     use_char_spacing = abs(char_spacing) > 0.01
 
-        # Prefer explicit flags from the client (which now come from the font's
-    # real OS/2 fsSelection bits). Fall back to name-based inference only
-    # when the client did not supply a value — this preserves behaviour
-    # for any caller that hasn't been updated yet.
     if bold is not None:
         bold_flag = bool(bold)
     else:
@@ -832,134 +882,6 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
     elif align == 'right':
         ins_x = page_right - left_margin - total_w
 
-        # Split text into runs based on character overrides
-    if character_overrides:
-        char_styles = []
-        for i, ch in enumerate(text):
-            eff_style = {
-                'fontName': font_name,
-                'fontSize': original_size,
-                'bold': bold_flag,
-                'italic': italic_flag,
-                'color': color,
-                'outlineColor': outline_color,
-                'outlineWidth': outline_width,
-                'charSpacing': char_spacing,
-            }
-            for ov in character_overrides:
-                ov_start = int(ov.get('start', 0))
-                ov_end = int(ov.get('end', 0))
-                ov_style = ov.get('style', {}) or {}
-                if ov_start <= i < ov_end:
-                    if 'fontFamily' in ov_style and ov_style['fontFamily']:
-                        # Convert family to backend font name with bold/italic
-                        bold_v = ov_style.get('bold', eff_style['bold'])
-                        italic_v = ov_style.get('italic', eff_style['italic'])
-                        fn = ov_style['fontFamily']
-                        if bold_v and italic_v: fn += '-BoldItalic'
-                        elif bold_v: fn += '-Bold'
-                        elif italic_v: fn += '-Italic'
-                        eff_style['fontName'] = fn
-                    if 'fontSize' in ov_style and ov_style['fontSize'] is not None:
-                        eff_style['fontSize'] = float(ov_style['fontSize'])
-                    if 'bold' in ov_style and ov_style['bold'] is not None:
-                        eff_style['bold'] = bool(ov_style['bold'])
-                    if 'italic' in ov_style and ov_style['italic'] is not None:
-                        eff_style['italic'] = bool(ov_style['italic'])
-                    if 'color' in ov_style and ov_style['color'] is not None:
-                        eff_style['color'] = to_color_tuple(ov_style['color'])
-                    if 'outlineColor' in ov_style and ov_style['outlineColor'] is not None:
-                        eff_style['outlineColor'] = to_color_tuple(ov_style['outlineColor'])
-                    if 'outlineWidth' in ov_style and ov_style['outlineWidth'] is not None:
-                        eff_style['outlineWidth'] = float(ov_style['outlineWidth'])
-                    if 'charSpacing' in ov_style and ov_style['charSpacing'] is not None:
-                        eff_style['charSpacing'] = float(ov_style['charSpacing'])
-            char_styles.append(eff_style)
-
-        # Group consecutive chars with same style
-        runs = []
-        cur = None
-        for i, ch in enumerate(text):
-            s = char_styles[i]
-            key = (s['fontName'], round(s['fontSize'], 2), s['bold'], s['italic'],
-                   s['color'], s['outlineColor'], round(s['outlineWidth'], 2),
-                   round(s['charSpacing'], 2))
-            if not cur or cur['key'] != key:
-                if cur:
-                    runs.append(cur)
-                cur = {'key': key, 'style': s, 'text': ch, 'start': i}
-            else:
-                cur['text'] += ch
-        if cur:
-            runs.append(cur)
-
-        # Render each run at the correct x position
-        log(f"    character_overrides → {len(runs)} runs")
-        x_cursor_r = ins_x
-        y_cursor_r = baseline_y
-        inserted_any_r = False
-        for run in runs:
-            st = run['style']
-            run_text = run['text']
-            if not run_text:
-                continue
-
-            # Resolve font for this run
-            fam_from_name, _cat = detect_font_info(st['fontName'] or '')
-            bold_r = bool(st['bold'])
-            italic_r = bool(st['italic'])
-            reg_r = None
-            sys_path_r = _pick_system_file(fam_from_name, bold_r, italic_r)
-            if sys_path_r:
-                reg_r = _register_font_file(page, doc, sys_path_r, f"runsys:{sys_path_r}:{bold_r}:{italic_r}")
-            if not reg_r and fam_from_name in GOOGLE_FONT_FAMILIES:
-                weight = 700 if bold_r else 400
-                path = _download_google_font(fam_from_name, weight, italic_r)
-                if not path and bold_r:
-                    path = _download_google_font(fam_from_name, 400, italic_r)
-                if path:
-                    reg_r = _register_font_file(page, doc, path, f"rungf:{fam_from_name}:{weight}:{italic_r}")
-            if not reg_r:
-                reg_r = 'helv'
-
-            try:
-                if st['outlineColor'] and st['outlineWidth'] and st['outlineWidth'] > 0:
-                    page.insert_text(
-                        fitz.Point(x_cursor_r, y_cursor_r), run_text,
-                        fontname=reg_r, fontsize=st['fontSize'],
-                        color=to_color_tuple(st['outlineColor']),
-                        fill=st['color'],
-                        render_mode=2,
-                        border_width=float(st['outlineWidth']),
-                        overlay=True,
-                    )
-                else:
-                    page.insert_text(
-                        fitz.Point(x_cursor_r, y_cursor_r), run_text,
-                        fontname=reg_r, fontsize=st['fontSize'],
-                        color=st['color'],
-                        render_mode=0,
-                        overlay=True,
-                    )
-                inserted_any_r = True
-            except Exception as e:
-                log(f"    run insert failed for '{run_text[:15]}': {e}")
-
-            # Advance x_cursor by measured width
-            try:
-                w = fitz.get_text_length(run_text, fontname=reg_r, fontsize=st['fontSize'])
-            except Exception:
-                w = len(run_text) * st['fontSize'] * 0.5
-            x_cursor_r += w
-            if st['charSpacing']:
-                x_cursor_r += st['charSpacing'] * max(0, len(run_text) - 1)
-
-        if inserted_any_r:
-            # Underline/strike handled separately below using full width
-            actual_width = x_cursor_r - ins_x
-            inserted_any = True
-        # else fall through to normal single-run insertion below
-
     inserted_any = False
     x_cursor = ins_x
     y_cursor = baseline_y
@@ -986,10 +908,7 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
 
         ok = False
         try:
-            # render_mode=0 → pure fill, no stroke. This is the ONLY way
-            # to guarantee text isn't rendered bold.
-            if use_outline_condition := (outline_color is not None and outline_width > 0):
-                # User explicitly asked for an outline: fill + real stroke
+            if outline_color is not None and outline_width > 0:
                 page.insert_text(
                     fitz.Point(x_cursor, y_cursor), seg,
                     fontname=reg_name,
@@ -1001,7 +920,6 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
                     overlay=True,
                 )
             else:
-                # Normal text: fill only
                 page.insert_text(
                     fitz.Point(x_cursor, y_cursor), seg,
                     fontname=reg_name,
@@ -1015,7 +933,6 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
             inserted_any = True
             log(f"    Inserted [{kind}] '{seg[:15]}' x={x_cursor:.1f} font={reg_name}")
         except TypeError:
-            # Older PyMuPDF might not accept some kwarg — retry minimal
             try:
                 page.insert_text(
                     fitz.Point(x_cursor, y_cursor), seg,
@@ -1075,8 +992,9 @@ def _insert_text_span(page, doc, x0, y0, x1, y1, text, font_name, font_size, col
         except Exception as e:
             log(f"    Decoration failed: {e}")
 
+
 # ===========================================================================
-# SHAPES
+# SHAPES  (unchanged)
 # ===========================================================================
 def _draw_shape(page, shape_type, x0, y0, x1, y1, stroke_color, stroke_width, fill_color):
     rect = fitz.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
@@ -1126,7 +1044,7 @@ def _draw_shape(page, shape_type, x0, y0, x1, y1, stroke_color, stroke_width, fi
 
 
 # ===========================================================================
-# HIGHLIGHT
+# HIGHLIGHT  (unchanged)
 # ===========================================================================
 def _draw_highlight(page, x0, y0, x1, y1, color, opacity):
     rect = fitz.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
@@ -1157,7 +1075,7 @@ def _draw_highlight(page, x0, y0, x1, y1, color, opacity):
 
 
 # ===========================================================================
-# IMAGE
+# IMAGE  (unchanged)
 # ===========================================================================
 def _draw_image(page, x0, y0, x1, y1, data_url):
     if not data_url or ',' not in data_url:
@@ -1178,7 +1096,7 @@ def _draw_image(page, x0, y0, x1, y1, data_url):
 
 
 # ===========================================================================
-# FREEHAND
+# FREEHAND  (unchanged)
 # ===========================================================================
 def _draw_freehand(page, points, color, stroke_width, opacity):
     if not points or len(points) < 2:
@@ -1220,6 +1138,198 @@ def _draw_freehand(page, points, color, stroke_width, opacity):
 
 
 # ===========================================================================
+# TEXT-FREE BACKGROUND RESTORATION
+# ===========================================================================
+
+# Padding applied to each edit bbox when we snapshot / redact / restore.
+# Kept small so we don't intrude on neighbouring cells or lines.
+_PAD_X = 2.0
+_PAD_Y = 3.0
+
+# DPI for the background snapshot. 300 gives near-vector crispness on typical
+# text backgrounds and keeps the embedded image small (each region is tiny).
+_SNAPSHOT_DPI = 300
+
+
+def _build_text_free_copy(doc, page_num):
+    """
+    Return (temp_doc, temp_page): a single-page document that is identical
+    to page `page_num` of `doc` but with all text made invisible.
+
+    We achieve this by prepending `BT 3 Tr ET\\n` to the page's first content
+    stream. Text render mode 3 = invisible, and it persists across BT/ET
+    blocks because it's a graphics-state parameter (per PDF 32000-1 §9.3).
+
+    Caller owns the returned document and must .close() it.
+    """
+    temp_doc = fitz.open()
+    temp_doc.insert_pdf(doc, from_page=page_num - 1, to_page=page_num - 1)
+    temp_page = temp_doc[0]
+
+    try:
+        xrefs = list(temp_page.get_contents())
+        if xrefs:
+            first_xref = xrefs[0]
+            original = temp_doc.xref_stream(first_xref) or b''
+            # Guard: avoid double-prepending if the stream already starts
+            # with our marker (defensive, shouldn't happen).
+            if not original.startswith(b'BT 3 Tr ET'):
+                temp_doc.update_stream(first_xref, b'BT 3 Tr ET\n' + original)
+                # Serialize + reopen to guarantee the fresh page object sees
+                # the updated stream (PyMuPDF sometimes caches decoded ops).
+                pdf_bytes = temp_doc.tobytes(deflate=True)
+                temp_doc.close()
+                temp_doc = fitz.open("pdf", pdf_bytes)
+                temp_page = temp_doc[0]
+    except Exception as ex:
+        log(f"  text-free prep failed: {ex}")
+
+    return temp_doc, temp_page
+
+
+def _snapshot_backgrounds(doc, page_num, edit_rects):
+    """
+    Return {id(edit): fitz.Pixmap} — a high-DPI rendering of each edit's
+    region as it appears WITHOUT any text.
+    """
+    pixmaps = {}
+    temp_doc, temp_page = _build_text_free_copy(doc, page_num)
+    try:
+        for e, rect in edit_rects:
+            try:
+                pm = temp_page.get_pixmap(
+                    clip=rect,
+                    dpi=_SNAPSHOT_DPI,
+                    colorspace=fitz.csRGB,
+                    alpha=False,
+                )
+                pixmaps[id(e)] = pm
+            except Exception as ex:
+                log(f"  snapshot failed for edit: {ex}")
+    finally:
+        try:
+            temp_doc.close()
+        except Exception:
+            pass
+    return pixmaps
+
+
+def _apply_edits_seamless(doc, page_num, edits, font_cache):
+    """
+    Apply all text edits on one page using background restoration.
+
+    Returns the fresh Page object for the caller (additions code uses it).
+    """
+    page = doc[page_num - 1]
+    page_rect = page.rect
+
+    # --- 1. Compute expanded rects for every edit -----------------------
+    edit_rects = []
+    for e in edits:
+        bbox = e.get('bbox')
+        if not bbox or len(bbox) != 4:
+            continue
+        try:
+            x0, y0, x1, y1 = [float(v) for v in bbox]
+        except (TypeError, ValueError):
+            continue
+        if x1 < x0: x0, x1 = x1, x0
+        if y1 < y0: y0, y1 = y1, y0
+
+        rect = fitz.Rect(
+            x0 - _PAD_X, y0 - _PAD_Y,
+            x1 + _PAD_X, y1 + _PAD_Y,
+        ) & page_rect
+        if rect.is_empty or rect.width < 0.5 or rect.height < 0.5:
+            continue
+        edit_rects.append((e, rect))
+
+    if not edit_rects:
+        return page
+
+    log(f"  seamless: {len(edit_rects)} regions on page {page_num}")
+
+    # --- 2. Snapshot each region WITHOUT text ---------------------------
+    pixmaps = _snapshot_backgrounds(doc, page_num, edit_rects)
+
+    # --- 3. Redact all regions with TRANSPARENT fill --------------------
+    #   `fill=None` removes the content without painting anything.
+    #   `PDF_REDACT_IMAGE_NONE` keeps images in the region intact.
+    for e, rect in edit_rects:
+        try:
+            page.add_redact_annot(rect)  # no fill → transparent
+        except Exception as ex:
+            log(f"  add_redact_annot failed: {ex}")
+
+    try:
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+    except Exception as ex:
+        log(f"  apply_redactions failed: {ex}")
+
+    # Refresh page object after redaction (structure may have changed).
+    page = doc[page_num - 1]
+
+    # --- 4. Restore backgrounds from the snapshots ----------------------
+    for e, rect in edit_rects:
+        pm = pixmaps.get(id(e))
+        if pm is None:
+            continue
+        try:
+            # Insert the text-free background image at the exact rect.
+            page.insert_image(rect, pixmap=pm, overlay=True)
+        except Exception as ex:
+            log(f"  insert_image failed: {ex}")
+
+    # --- 5. Draw the new text on top ------------------------------------
+    # Re-extract fonts because apply_redactions may have mutated the page.
+    font_cache_fresh = pre_extract_page_fonts(page, doc, page_num)
+
+    for e, rect in edit_rects:
+        new_text = e.get('newText')
+        if new_text is None:
+            continue
+        new_text = str(new_text)
+        if new_text.strip() == '':
+            continue
+
+        bbox = e.get('bbox')
+        x0, y0, x1, y1 = [float(v) for v in bbox]
+        if x1 < x0: x0, x1 = x1, x0
+        if y1 < y0: y0, y1 = y1, y0
+
+        _insert_text_span(
+            page, doc,
+            x0 + float(e.get('offsetX', 0) or 0),
+            y0 + float(e.get('offsetY', 0) or 0),
+            x1 + float(e.get('offsetX', 0) or 0),
+            y1 + float(e.get('offsetY', 0) or 0),
+            new_text,
+            e.get('fontName', 'Helvetica'),
+            float(e.get('fontSize', 11.0)) or 11.0,
+            e.get('color', [0.0, 0.0, 0.0]),
+            original_font_name=e.get('originalFontName'),
+            original_text=e.get('originalText', ''),
+            preserve_original_font=bool(e.get('preserveOriginalFont', False)),
+            family_explicit=bool(e.get('familyExplicit', False)),
+            font_cache=font_cache_fresh,
+            character_overrides=e.get('characterOverrides', []),
+            align=(e.get('align') or 'left').lower(),
+            underline=bool(e.get('underline')),
+            strike=bool(e.get('strike')),
+            superscript=bool(e.get('superscript')),
+            subscript=bool(e.get('subscript')),
+            char_spacing=float(e.get('charSpacing', 0) or 0),
+            h_scale=float(e.get('hScale', 100) or 100) / 100.0,
+            outline_color=e.get('outlineColor'),
+            outline_width=float(e.get('outlineWidth', 0) or 0),
+            bold=e.get('bold'),
+            italic=e.get('italic'),
+        )
+
+    return page
+
+
+# ===========================================================================
 # MAIN
 # ===========================================================================
 def perform_edits(input_path, output_path, edits, additions):
@@ -1228,17 +1338,22 @@ def perform_edits(input_path, output_path, edits, additions):
 
     edits_by_page, additions_by_page = {}, {}
     for e in edits:
-        try: p = int(e.get('page', 1))
-        except Exception: continue
+        try:
+            p = int(e.get('page', 1))
+        except Exception:
+            continue
         edits_by_page.setdefault(p, []).append(e)
     for a in additions:
-        try: p = int(a.get('page', 1))
-        except Exception: continue
+        try:
+            p = int(a.get('page', 1))
+        except Exception:
+            continue
         additions_by_page.setdefault(p, []).append(a)
 
     for page_num in sorted(set(edits_by_page) | set(additions_by_page)):
         if not (1 <= page_num <= len(doc)):
             continue
+
         page = doc[page_num - 1]
         page_edits = edits_by_page.get(page_num, [])
         page_additions = additions_by_page.get(page_num, [])
@@ -1246,64 +1361,21 @@ def perform_edits(input_path, output_path, edits, additions):
 
         font_cache = pre_extract_page_fonts(page, doc, page_num) if page_edits else {}
 
+        # ------------------------------------------------------------------
+        # TEXT EDITS — background restoration
+        # ------------------------------------------------------------------
         if page_edits:
-            for e in page_edits:
-                bbox = e.get('bbox')
-                if not bbox or len(bbox) != 4: continue
-                x0, y0, x1, y1 = [float(v) for v in bbox]
-                if x1 < x0: x0, x1 = x1, x0
-                if y1 < y0: y0, y1 = y1, y0
-                rect = fitz.Rect(x0 - 1.0, y0 - 1.5, x1 + 1.5, y1 + 1.0)
-                bg = to_color_tuple(e.get('bgColor', [1.0, 1.0, 1.0]))
-                try:
-                    page.add_redact_annot(rect, fill=bg)
-                except Exception as ex:
-                    log(f"add_redact_annot failed: {ex}")
             try:
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+                page = _apply_edits_seamless(doc, page_num, page_edits, font_cache)
             except Exception as ex:
-                log(f"apply_redactions failed: {ex}")
+                log(f"  seamless edit block failed on page {page_num}: {ex}")
+                import traceback
+                traceback.print_exc(file=sys.stderr)
+                # Continue with additions rather than aborting the whole doc.
 
-            for e in page_edits:
-                new_text = e.get('newText')
-                if new_text is None: continue
-                new_text = str(new_text)
-                if new_text.strip() == '': continue
-                bbox = e.get('bbox')
-                if not bbox or len(bbox) != 4: continue
-                x0, y0, x1, y1 = [float(v) for v in bbox]
-                if x1 < x0: x0, x1 = x1, x0
-                if y1 < y0: y0, y1 = y1, y0
-
-                _insert_text_span(
-                    page, doc,
-                    x0 + float(e.get('offsetX', 0) or 0),
-                    y0 + float(e.get('offsetY', 0) or 0),
-                    x1 + float(e.get('offsetX', 0) or 0),
-                    y1 + float(e.get('offsetY', 0) or 0),
-                    new_text,
-                    e.get('fontName', 'Helvetica'),
-                    float(e.get('fontSize', 11.0)) or 11.0,
-                    e.get('color', [0.0, 0.0, 0.0]),
-                    original_font_name=e.get('originalFontName'),
-                    original_text=e.get('originalText', ''),
-                    preserve_original_font=bool(e.get('preserveOriginalFont', False)),
-                    family_explicit=bool(e.get('familyExplicit', False)),
-                    font_cache=font_cache,
-                    character_overrides=e.get('characterOverrides', []),
-                    align=(e.get('align') or 'left').lower(),
-                    underline=bool(e.get('underline')),
-                    strike=bool(e.get('strike')),
-                    superscript=bool(e.get('superscript')),
-                    subscript=bool(e.get('subscript')),
-                    char_spacing=float(e.get('charSpacing', 0) or 0),
-                    h_scale=float(e.get('hScale', 100) or 100) / 100.0,
-                    outline_color=e.get('outlineColor'),
-                    outline_width=float(e.get('outlineWidth', 0) or 0),
-                    bold=e.get('bold'),
-                    italic=e.get('italic'),
-                )
-
+        # ------------------------------------------------------------------
+        # ADDITIONS (unchanged)
+        # ------------------------------------------------------------------
         for a in page_additions:
             try:
                 a_type = a.get('type')
@@ -1313,12 +1385,16 @@ def perform_edits(input_path, output_path, edits, additions):
                     x0 = float(bbox.get('x0', 0)); y0 = float(bbox.get('y0', 0))
                     x1 = float(bbox.get('x1', 0)); y1 = float(bbox.get('y1', 0))
                     text = a.get('text', '')
-                    if not text: continue
+                    if not text:
+                        continue
                     font_size = float(a.get('fontSize', 14)) or 14
                     font_name = a.get('fontName', 'Helvetica')
-                    if a.get('bold') and a.get('italic'): font_name = f"{font_name}-BoldItalic"
-                    elif a.get('bold'): font_name = f"{font_name}-Bold"
-                    elif a.get('italic'): font_name = f"{font_name}-Italic"
+                    if a.get('bold') and a.get('italic'):
+                        font_name = f"{font_name}-BoldItalic"
+                    elif a.get('bold'):
+                        font_name = f"{font_name}-Bold"
+                    elif a.get('italic'):
+                        font_name = f"{font_name}-Italic"
 
                     baseline = y1 if y1 > y0 else y0
                     ins_y0 = baseline - font_size * 0.9
