@@ -212,17 +212,36 @@ The container is **stateless** — every request writes temp files under ```/tmp
 
 ## 🌐 Production Hosting Setup
 
-**Backend (Render):** In Render, create a new Web Service, link your repository, set the Runtime to Docker, and point the root directory to your backend/ folder. Render will build the container with LibreOffice installed automatically. Render binds to port 5000 automatically.
+**Backend (Render):** 
+Render's free tier is enough to host PDF Forge, but it requires **two separate services:** a Docker Web Service for the backend and a Static Site for the React frontend.
 
-***Frontend (GitHub Pages / Vercel):** Set VITE_API_BASE_URL=https://<your-backend-domain>.onrender.com in .env.production and deploy using npm run build.
+In Render, create a new Web Service, link your repository, set the Runtime to Docker, and point the root directory to your backend/ folder. Render will build the container with LibreOffice installed automatically. Render binds to port 5000 automatically.
 
-## 🔒 Security & Processing Architecture
+**Frontend (GitHub Pages / Vercel):** Set VITE_API_BASE_URL=https://<your-backend-domain>.onrender.com in .env.production and deploy using npm run build.
+
+## 🔒 Security, Privacy & Processing Architecture
+PDF Forge is built around a simple promise: your documents remain yours.
 
 * Stateless & Ephemeral Storage: All uploaded and generated files are stored in temporary memory/disk locations and deleted immediately after the response stream closes.
 
 * Password Verification: Encrypted files are validated prior to execution to prevent process deadlocks.
 
 * Valid OpenXML Generation: Document models are synthesized strictly within Microsoft OpenXML standards to eliminate corrupt file warnings.
+
+### Client-side processing (default for most tools)
+Merge, split, rotate, watermark, page numbers, crop, compress, sign, forms, and OCR all run entirely inside the browser using WebAssembly and JavaScript. Your file never leaves your device.
+
+### Server-side processing (only when a real engine is required)
+Office conversions, PDF/A, and in-place text editing run on the backend. These paths are stateless:
+* **Multer configuration:** multer.memoryStorage() keeps uploads entirely in RAM as a Buffer. No files are written to server folders or databases.
+* **Conversion & response:** The engine processes the in-memory stream; Express streams the output back via res.send(buffer). Node's garbage collector releases the memory as soon as the response closes.
+* **Client handling:** The browser receives the response as a Blob URL (URL.createObjectURL), which is revoked the moment the modal closes or the user navigates away.
+
+### Additional guarantees
+* **No database.** There is nothing persistent to leak.
+* **No analytics.** No fingerprinting, no ads, no third-party tracking.
+* **Password-aware.** Encrypted PDFs and locked Office files are detected up-front; the app refuses to process them unless you explicitly provide the password to the Unlock tool.
+* **Auditable source.** Every line of code is on GitHub. Verify our claims, self-host it, or fork it.
 
 ## 🗺 Roadmap
 * Repair PDF (recover corrupted files)
