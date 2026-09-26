@@ -15,8 +15,8 @@ A modern, high-performance web application and desktop suite for converting, man
 
 ### Convert to PDF 
 * **Compress PDF** : Quality-preserving compression with before-and-after file size metrics.
-* **Repair PDF** :
-* **OCR Pages** :
+* **Repair PDF** : (Coming Soon) Recover damaged and corrupted PDFs.
+* **OCR Pages** : Make scanned documents searchable using in-browser Tesseract WASM. Supports English, Hindi, Spanish, French, and German. Two output modes: searchable PDF (invisible text layer) or plain .txt. Configurable DPI presets (192/288/384), character whitelists, and binarization.
 
 ### Optimize PDF 
 * **JPG to PDF** : Conversion of Images to PDF with additional configuration applied on image while conversion
@@ -30,22 +30,23 @@ A modern, high-performance web application and desktop suite for converting, man
 * **PDF to Word** : High-fidelity document reconstruction preserving fonts, sizes, tables, and alignment without OpenXML schema corruption.
 * **PDF to PowerPoint** : Slide-by-slide conversion retaining layout boundaries.
 * **PDF to Excel** : Structured table and data extraction directly into clean `.xlsx` workbooks.
-* **PDF to PDF/A** :
+* **PDF to PDF/A** : ISO 19005 archival conversion (1b / 2b / 3b) with proper ICC OutputIntent, embedded fonts, and device-independent sRGB colorspace.
 
 ### Edit PDF 
 * **Rotate PDF** : Interactive single-page and full-document rotation ($90^\circ$, $-90^\circ$, $180^\circ$).
 * **Add page numbers** : Add pages on each / specific / range of pages with extra configuration tools given 
 * **Add watermark** : Adding watermark with rotational ability on each or range of pages
-* **Crop PDF** : 
-* **Edit PDF** :
-* **PDF Forms** : Add form fields or edit in uploaded pdf
+* **Crop PDF** : Trim margins and adjust the visible page area with per-page or global boxes.
+* **Edit PDF** : Full-featured annotation editor built on the EmbedPDF / PDFium WASM engine. Add text boxes, highlights, images, shapes (rectangle, ellipse, line, arrow, triangle, diamond), freehand drawings, and redactions.
+* **Edit PDF Text** : In-place editing of existing text using a PyMuPDF text-free background restoration pipeline — preserves colored backgrounds, gradients, and images without painting white boxes. Includes background OCR to recover garbled ToUnicode mappings. Desktop only.
+* **PDF Forms** : Detect, fill, and create interactive AcroForm fields (text, checkbox, radio, dropdown, listbox, signature).
 
 ### PDF Security 
 * **Unlock PDF** : Unlock a password protect or encrypted PDF once and for all 
 * **Protect PDF** : Protect your PDF with password you want 
-* **Sign PDF** : Sign with uploaded or signed signature, company stamp or name & date 
-* **Redact PDF** :
-* **Compare PDF** :
+* **Sign PDF** : Draw, type (5 cursive fonts), or upload a signature, place it anywhere on any page, and burn it into the PDF with an aspect-ratio-locked resize workflow. 
+* **Redact PDF** : (Coming Soon)
+* **Compare PDF** : (Coming Soon)
 
 ### PDF Intelligence 
 * **AI Summarizer** : Summarize your PDF with AI tool without going through a long set of pages
@@ -55,12 +56,28 @@ A modern, high-performance web application and desktop suite for converting, man
 ---
 
 ## 🛠 Tech Stack
+### Frontend
+* **Framework:** React 19 + Vite 8
+* **Styling:** Tailwind CSS v4 (via ```@tailwindcss/vite)```, ```tailwind-merge```, ```clsx```
+* **Icons:** Lucide React
+* **PDF rendering:** ```pdfjs-dist```, ```@embedpdf/react-pdf-viewer```, ```@embedpdf/pdfium```
+* **PDF manipulation:** ```pdf-lib```, ```@pdf-lib/fontkit```
+* **Signature:** ```react-signature-canvas```
+* **Image cropping:** ```react-image-crop```
+* **OCR (client-side):** ```tesseract.js```
+* **Archives:** ```jszip```
 
-* **Frontend:** React 18, Vite, Tailwind CSS, Lucide React, PDF-Lib, PDF.js
-* **Backend:** Node.js, Express, Multer, Child Process CLI Orchestration
-* **Engines & Parsers:** Python 3 (`PyMuPDF`, `python-docx`, `pdfplumber`, `openpyxl`), LibreOffice (Headless), Ghostscript, Poppler-Utils
+### Backend
+* **Runtime:** Node.js 20+ / Express 5
+* **Upload handling:** Multer (```memoryStorage``` — no disk writes)
+* **Process orchestration:** ```child_process.spawn```, ```libreoffice-convert```
 
-**NOTE**: LibreOffice is required on Render because libreoffice-convert acts as a wrapper around the system CLI (libreoffice --headless). Without the binary installed on the host OS, conversions will fail with spawn libreoffice ENOENT.
+### Engines & Parsers
+* **Python 3.10+:** PyMuPDF, python-docx, pdfplumber, openpyxl, pikepdf
+* **System binaries:** LibreOffice (headless), Ghostscript, qpdf, Poppler-utils
+* **Fonts:** Liberation, DejaVu, Noto, Carlito, Caladea
+
+> ⚠️ LibreOffice is required on Render because ```libreoffice-convert``` wraps the system CLI (```libreoffice --headless```). Without the binary, Office conversions will fail with ```spawn libreoffice ENOENT```.
 
 ---
 
@@ -76,22 +93,35 @@ A modern, high-performance web application and desktop suite for converting, man
 
 ```text
 ├── backend/
-│   ├── convert_pdf2docx.py      # Python engine for PDF/DOC to DOCX reconstruction
-│   ├── convert_pdf2excel.py     # Python engine for PDF to XLSX table extraction
-│   ├── Dockerfile               # Container deployment configuration for backend
-│   ├── package.json             # Backend dependencies
-│   └── server.js                # Express API endpoints & file conversion pipeline
+│   ├── convert_edit_pdf.py         # In-place PDF text editing (PyMuPDF background restoration)
+│   ├── pdf_inplace_editor.py       # Content-stream Tj/TJ rewriter for span edits
+│   ├── convert_pdf2docx.py         # PDF → DOCX reconstruction engine
+│   ├── convert_pdf2excel.py        # PDF → XLSX table extraction engine
+│   ├── convert_pdf2md.py           # PDF → Markdown converter (GFM tables + headings)
+│   ├── Dockerfile                  # Container image with Node + Python + LibreOffice + GS
+│   ├── package.json                # Backend Node dependencies
+│   └── server.js                   # Express API + conversion pipeline
 ├── src/
 │   ├── components/
-|   |   ├── Footer.jsx           # Footer of app
-|   |   ├── Header.jsx           # header of app
-|   |   ├── Reviews.jsx          # Reviews Carousel of app 
-│   │   ├── ToolCard.jsx         # Tool card UI component
-|   |   ├── ToolStudio.jsx       # Tool Studio component of app 
-│   │   └── ToolModal.jsx        # Interactive modal & page workspace
+|   |   ├── AboutSection.jsx        # About PDF Forge + values grid
+│   │   ├── EditPdfStudio.jsx       # Advanced in-place text editor (PyMuPDF powered)
+│   │   ├── FAQSection.jsx          # Accordion FAQ section
+│   │   ├── Footer.jsx              # Footer with quick tools, sections, resources
+│   │   ├── Header.jsx              # Sticky nav with mega-dropdown + mobile drawer
+│   │   ├── MobileNotSupportedModal.jsx
+│   │   ├── PdfiumEditStudio.jsx    # Annotation editor backed by EmbedPDF/PDFium
+│   │   ├── PdfiumTextEditOverlay.jsx
+│   │   ├── PrivacySection.jsx      # Dark privacy + security pillars
+│   │   ├── Reviews.jsx             # Testimonial carousel
+│   │   ├── SignPdfStudio.jsx       # Signature placement editor
+│   │   ├── TextFormatSidebar.jsx   # Font / color / spacing / alignment controls
+│   │   ├── ToolCard.jsx            # Interactive tool card with hover animations
+│   │   ├── ToolModal.jsx           # Upload & security-verification modal
+│   │   └── ToolStudio.jsx          # Full-screen workspace for all 25+ tools
 |   ├── data/
 |   │   └── pdfTools.jsx         # all pdf tools entry
 │   ├── utils/
+│   │   ├── pageOcrReader.js        # Tesseract-based OCR helper (upscale + contrast)
 │   │   └── pdfWorker.js         # Client-side processing & backend API client
 │   ├── App.jsx                  # Main dashboard layout
 │   ├── index.css                # Global Tailwind CSS styles
@@ -166,8 +196,10 @@ npm install
 # Start the Vite development server (runs on http://localhost:5173)
 npm run dev
 ```
+Vite starts on http://localhost:5173 and proxies ```/api/*``` requests to the backend on port 5000 (configured in ```vite.config.js```).
 
 ## 🐳 Docker Deployment (Render / Cloud Containers)
+The backend ships with a ```Dockerfile``` that installs Node 20, Python 3, LibreOffice, Ghostscript, and the required font packages in one image. This is the recommended way to run the backend anywhere (Render, Fly.io, Railway, self-hosted VPS).
 Build and run the self-contained backend container:
 ```
 # Build the backend container image
@@ -176,6 +208,7 @@ docker build -t pdf-tools-backend ./backend
 # Run the container exposing port 5000
 docker run -p 5000:5000 pdf-tools-backend
 ```
+The container is **stateless** — every request writes temp files under ```/tmp``` and removes them in a finally block. Nothing persists across restarts.
 
 ## 🌐 Production Hosting Setup
 
@@ -190,3 +223,32 @@ docker run -p 5000:5000 pdf-tools-backend
 * Password Verification: Encrypted files are validated prior to execution to prevent process deadlocks.
 
 * Valid OpenXML Generation: Document models are synthesized strictly within Microsoft OpenXML standards to eliminate corrupt file warnings.
+
+## 🗺 Roadmap
+* Repair PDF (recover corrupted files)
+* Redact PDF (permanent blackout)
+* Compare PDF (visual + text diff)
+* Sign PDF with X.509 / PKCS#7 cryptographic signatures
+* AI Summarizer (local + cloud LLM options)
+* Translate PDF
+* Scan to PDF (camera capture)
+* Batch processing / presets
+* Desktop app (Tauri / Electron wrapper)
+
+## 🤝 Contributing
+Contributions are welcome. Please:
+1. Fork the repository.
+2. Create a feature branch (git checkout -b feat/amazing-tool).
+3. Commit with a descriptive message.
+4. Open a pull request against main.
+
+For bug reports, please include:
+* Browser + OS
+* Exact steps to reproduce
+* A sample file (if safe to share)
+* Any console errors
+
+## 📄 License
+MIT — see LICENSE.
+
+<p align="center"> Crafted with ❤️ by <strong>Saurabh Panchal</strong><br/> <a href="https://github.com/saurabhpan98/pdf-forge">GitHub</a> · <a href="https://github.com/saurabhpan98/pdf-forge/issues">Report an Issue</a> </p>
