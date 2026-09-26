@@ -2415,3 +2415,129 @@ export async function editPdfText(file, edits, additions = []) {
     compressedSize: pdfBlob.size,
   };
 }
+
+/* =========================================================================
+ *  PDF → PDF/A
+ *
+ *  Uses the backend's Ghostscript pipeline with a proper ICC OutputIntent.
+ *  Supports PDF/A-1b, 2b, and 3b conformance levels.
+ * ========================================================================= */
+export async function convertPdfToPdfA(file, options = {}) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('level', String(options.level || '2'));
+  formData.append('conformance', String(options.conformance || 'b'));
+  formData.append('colorStrategy', options.colorStrategy || 'UseDeviceIndependentColor');
+  if (options.title) formData.append('title', options.title);
+  if (options.author) formData.append('author', options.author);
+  if (options.subject) formData.append('subject', options.subject);
+  if (options.keywords) formData.append('keywords', options.keywords);
+
+  //const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-pdfa`, {
+  const response = await fetch('/api/convert/pdf-to-pdfa', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Server failed to convert PDF to PDF/A.');
+  }
+
+  const pdfBlob = await response.blob();
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+  const level = options.level || '2';
+  const conformance = String(options.conformance || 'b').toLowerCase();
+
+  return {
+    blob: pdfBlob,
+    filename: `${baseName}_PDFA-${level}${conformance}.pdf`,
+    originalSize: file.size,
+    compressedSize: pdfBlob.size,
+  };
+}
+
+/* =========================================================================
+ *  SIGN PDF
+ *
+ *  Embeds signature images (PNG data URLs) into a PDF at user-specified
+ *  positions. Each signature carries page, x/y, width/height in PDF points.
+ *
+ *  Supports:
+ *    • Multiple signatures per page and across pages
+ *    • Optional flattening (baked into page content vs. kept as annotations)
+ *    • PNG transparency preserved (drawn via embedPng)
+ * ========================================================================= */
+export async function signPdf(file, signatures, options = {}) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  if (!signatures || signatures.length === 0) {
+    throw new Error('No signatures to apply.');
+  }
+
+  const { flatten = true } = options;
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+
+  // Cache embedded PNGs so the same signature used on multiple pages is
+  // stored once in the PDF XObject dictionary (pdf-lib deduplicates by
+  // identity of the embedded image object).
+  const imageCache = new Map();
+
+  const getEmbedded = async (dataUrl) => {
+    if (imageCache.has(dataUrl)) return imageCache.get(dataUrl);
+    const base64 = dataUrl.split(',')[1];
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const img = await pdfDoc.embedPng(bytes);
+    imageCache.set(dataUrl, img);
+    return img;
+  };
+
+  for (const sig of signatures) {
+    const pageIndex = Math.max(0, Math.min(sig.page - 1, pdfDoc.getPageCount() - 1));
+    const page = pdfDoc.getPage(pageIndex);
+    const embedded = await getEmbedded(sig.dataUrl);
+
+    // sig coordinates are in PDF points (already converted from canvas by
+    // the caller). pdf-lib uses bottom-left origin.
+    page.drawImage(embedded, {
+      x: sig.x,
+      y: sig.y,
+      width: sig.width,
+      height: sig.height,
+      opacity: sig.opacity ?? 1,
+    });
+  }
+
+  // `flatten` here is a no-op distinction for pdf-lib: drawImage always
+  // bakes content into the page. The flag is preserved so a future
+  // annotation-based variant can be added without changing the API.
+  // (BentoPDF's "annotation vs. flatten" distinction requires the annotation
+  // path, which pdf-lib doesn't expose. Draw-to-page is the flatten path.)
+  void flatten;
+
+  const pdfBytes = await pdfDoc.save({ useObjectStreams: true });
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+
+  return {
+    blob: new Blob([pdfBytes], { type: 'application/pdf' }),
+    filename: `${baseName}_signed.pdf`,
+    originalSize: file.size,
+    compressedSize: pdfBytes.byteLength,
+  };
+}

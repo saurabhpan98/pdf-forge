@@ -52,7 +52,8 @@ import {
   Move,
   X as CloseIcon,
   SlidersVertical,
-  ScanText
+  ScanText,
+  FileCheck
 } from 'lucide-react';
 import {
   mergePDFs,
@@ -75,6 +76,7 @@ import {
   convertPdfToWord,
   convertPdfToPowerpoint,
   convertPdfToExcel,
+  convertPdfToPdfA,
   addPageNumbersToPDF,
   addWatermarkToPDF,
   protectPDF,
@@ -90,6 +92,7 @@ import {
 } from '../utils/pdfWorker';
 import PdfiumEditStudio from './PdfiumEditStudio';
 import EditPdfStudio from './EditPdfStudio';
+import SignPdfStudio from './SignPdfStudio';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
   const [files, setFiles] = useState(initialFiles || []);
@@ -114,6 +117,17 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
   // Compression tool settings
   const [compressionPercent, setCompressionPercent] = useState(45);
+
+    // PDF/A conversion settings
+  const [pdfaOptions, setPdfaOptions] = useState({
+    level: '2',
+    conformance: 'b',
+    colorStrategy: 'UseDeviceIndependentColor',
+    title: '',
+    author: '',
+    subject: '',
+    keywords: '',
+  });
 
     // OCR Tool Settings
   const [ocrLanguage, setOcrLanguage] = useState('eng');
@@ -994,6 +1008,9 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
         case 'pdf-to-excel':
           output = await convertPdfToExcel(files[0]);
           break;
+        case 'pdf-to-excel':
+          output = await convertPdfToExcel(files[0]);
+          break;
         case 'pdf-to-powerpoint':
           output = await convertPdfToPowerpoint(files[0]);
           break;
@@ -1432,6 +1449,17 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   if (tool?.id === 'edit-text') {
     return (
       <EditPdfStudio
+        tool={tool}
+        file={files[0]}
+        onBack={onBack}
+      />
+    );
+  }
+
+  // --- Sign PDF uses the signature-placement editor ---
+  if (tool?.id === 'sign') {
+    return (
+      <SignPdfStudio
         tool={tool}
         file={files[0]}
         onBack={onBack}
@@ -3406,6 +3434,221 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                 <button onClick={executeAction} disabled={isProcessing} className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer">
                   {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Compress PDF (~{compressionPercent}%)</span>}
                 </button>
+              </div>
+            )}
+
+                        {/* 9b. PDF to PDF/A Studio */}
+            {tool?.id === 'pdf-to-pdfa' && (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
+                {/* Left column: file card + conformance + metadata */}
+                <div className="lg:col-span-7 space-y-5">
+                  <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-5">
+                    <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                      <div className="flex items-center space-x-2.5">
+                        <div className="w-9 h-9 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center">
+                          <FileCheck className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-900">Source PDF</h3>
+                          <p className="text-[11px] text-slate-500 truncate max-w-[240px]">
+                            {files[0]?.name}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => changeFileInputRef.current?.click()}
+                        className="text-xs text-rose-600 hover:text-rose-700 font-bold flex items-center space-x-1 cursor-pointer"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Change</span>
+                      </button>
+                    </div>
+
+                    {files[0] && renderSingleFileThumbnailCard(files[0])}
+
+                    <div className="p-4 bg-sky-50 border border-sky-100 rounded-2xl flex items-start space-x-3 text-xs">
+                      <Info className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
+                      <div className="text-sky-900 leading-relaxed">
+                        <p className="font-bold mb-1">What is PDF/A?</p>
+                        <p className="text-sky-800/90">
+                          PDF/A is an ISO-standardized version of PDF designed for long-term
+                          archiving. Fonts are embedded, colors are normalized to a
+                          device-independent space, and external dependencies are removed so
+                          the file renders identically decades from now — even without the
+                          original software that created it.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">Conformance Level</h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Higher numbers support more features; lower numbers are more universally accepted.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {[
+                        { level: '1', label: 'PDF/A-1b', desc: 'Based on PDF 1.4. Strictest, most compatible.', badge: 'Strict', badgeClass: 'bg-slate-200 text-slate-700' },
+                        { level: '2', label: 'PDF/A-2b', desc: 'Based on PDF 1.7. Transparency & JPEG 2000.', badge: 'Recommended', badgeClass: 'bg-emerald-100 text-emerald-800' },
+                        { level: '3', label: 'PDF/A-3b', desc: 'Based on PDF/A-2 with file attachments allowed.', badge: 'Flexible', badgeClass: 'bg-blue-100 text-blue-800' },
+                      ].map((opt) => {
+                        const active = pdfaOptions.level === opt.level;
+                        return (
+                          <button
+                            key={opt.level}
+                            type="button"
+                            onClick={() => setPdfaOptions({ ...pdfaOptions, level: opt.level })}
+                            className={`p-4 rounded-2xl border text-left transition cursor-pointer relative ${
+                              active
+                                ? 'border-rose-500 bg-rose-50/50 ring-2 ring-rose-500/20'
+                                : 'border-slate-200 bg-white hover:border-slate-300'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className={`font-black text-sm ${active ? 'text-rose-700' : 'text-slate-800'}`}>
+                                {opt.label}
+                              </span>
+                              <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-md ${opt.badgeClass}`}>
+                                {opt.badge}
+                              </span>
+                            </div>
+                            <p className={`text-[11px] leading-relaxed ${active ? 'text-rose-900/80' : 'text-slate-500'}`}>
+                              {opt.desc}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <details className="bg-white border border-slate-200 rounded-3xl shadow-sm overflow-hidden group">
+                    <summary className="px-6 py-4 cursor-pointer flex items-center justify-between hover:bg-slate-50 transition select-none">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900">Document Metadata</h3>
+                        <p className="text-[11px] text-slate-500">Optional — improves archival quality</p>
+                      </div>
+                      <ChevronDownIcon className="w-4 h-4 text-slate-400 group-open:rotate-180 transition" />
+                    </summary>
+                    <div className="px-6 pb-6 pt-2 space-y-3 text-xs border-t border-slate-100">
+                      <div>
+                        <label className="font-semibold text-slate-700 block mb-1">Title</label>
+                        <input
+                          type="text"
+                          value={pdfaOptions.title}
+                          onChange={(e) => setPdfaOptions({ ...pdfaOptions, title: e.target.value })}
+                          placeholder="Document title"
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                        />
+                      </div>
+                      <div>
+                        <label className="font-semibold text-slate-700 block mb-1">Author</label>
+                        <input
+                          type="text"
+                          value={pdfaOptions.author}
+                          onChange={(e) => setPdfaOptions({ ...pdfaOptions, author: e.target.value })}
+                          placeholder="Author name"
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                        />
+                      </div>
+                      <div>
+                        <label className="font-semibold text-slate-700 block mb-1">Subject</label>
+                        <input
+                          type="text"
+                          value={pdfaOptions.subject}
+                          onChange={(e) => setPdfaOptions({ ...pdfaOptions, subject: e.target.value })}
+                          placeholder="Brief description"
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                        />
+                      </div>
+                      <div>
+                        <label className="font-semibold text-slate-700 block mb-1">Keywords</label>
+                        <input
+                          type="text"
+                          value={pdfaOptions.keywords}
+                          onChange={(e) => setPdfaOptions({ ...pdfaOptions, keywords: e.target.value })}
+                          placeholder="Comma separated keywords"
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                        />
+                      </div>
+                    </div>
+                  </details>
+                </div>
+
+                {/* Right column: summary + action */}
+                <div className="lg:col-span-5">
+                  <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-5 lg:sticky lg:top-20">
+                    <h3 className="text-sm font-bold text-slate-900 border-b border-slate-100 pb-3">
+                      Conversion Summary
+                    </h3>
+
+                    <div className="space-y-2.5 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500">Target format</span>
+                        <span className="font-bold text-slate-900 font-mono">
+                          PDF/A-{pdfaOptions.level}{pdfaOptions.conformance.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500">ISO standard</span>
+                        <span className="font-mono text-[10px] text-slate-700">
+                          ISO 19005-{pdfaOptions.level}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500">Color strategy</span>
+                        <span className="font-bold text-slate-900">sRGB (device-independent)</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500">Fonts</span>
+                        <span className="font-bold text-emerald-700">Fully embedded</span>
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-100 space-y-2">
+                      {[
+                        'All fonts embedded and subset',
+                        'Device-independent sRGB color space',
+                        'No external content dependencies',
+                        'Metadata normalized to XMP',
+                        'ICC OutputIntent declared',
+                      ].map((feat) => (
+                        <div key={feat} className="flex items-center space-x-2 text-[11px] text-slate-600">
+                          <Check className="w-3 h-3 text-emerald-500 shrink-0" />
+                          <span>{feat}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      onClick={executeAction}
+                      disabled={isProcessing || !files[0]}
+                      className="w-full py-4 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer"
+                    >
+                      {isProcessing ? (
+                        <div className="flex items-center space-x-2">
+                          <Loader2 className="w-4 h-4 animate-spin text-white" />
+                          <span>Converting to PDF/A…</span>
+                        </div>
+                      ) : (
+                        <>
+                          <FileCheck className="w-4 h-4" />
+                          <span>
+                            Convert to PDF/A-{pdfaOptions.level}
+                            {pdfaOptions.conformance.toUpperCase()}
+                          </span>
+                        </>
+                      )}
+                    </button>
+
+                    <p className="text-[10px] text-slate-400 text-center leading-relaxed">
+                      Processed on our secure backend. Your file is handled in memory and never stored.
+                    </p>
+                  </div>
+                </div>
               </div>
             )}
 

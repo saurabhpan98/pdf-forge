@@ -339,6 +339,183 @@ async function compressWithGhostscript(inputBuffer, qualityLevel = 45) {
   });
 }
 
+
+// ---------------------------------------------------------------------------
+// PDF/A conversion helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Locate an RGB ICC profile suitable for a PDF/A OutputIntent.
+ * Returns the absolute path or null.
+ */
+async function findIccProfile() {
+  const candidates = [
+    '/usr/share/color/icc/ghostscript/srgb.icc',
+    '/usr/share/color/icc/ghostscript/default_rgb.icc',
+    '/usr/share/color/icc/sRGB.icc',
+    '/usr/share/color/icc/srgb.icc',
+    '/usr/share/color/icc/colord/sRGB.icc',
+  ];
+
+  // Also probe versioned Ghostscript dirs — ICC location varies by release.
+  try {
+    const gsRoot = '/usr/share/ghostscript';
+    const entries = await fs.readdir(gsRoot).catch(() => []);
+    for (const v of entries) {
+      candidates.push(`/usr/share/ghostscript/${v}/iccprofiles/default_rgb.icc`);
+      candidates.push(`/usr/share/ghostscript/${v}/iccprofiles/srgb.icc`);
+      candidates.push(`/usr/share/ghostscript/${v}/iccprofiles/ps_rgb.icc`);
+    }
+  } catch { /* ignore */ }
+
+  for (const p of candidates) {
+    const st = await fs.stat(p).catch(() => null);
+    if (st && st.isFile()) return p;
+  }
+  return null;
+}
+
+/**
+ * Build the PostScript prelude that Ghostscript uses to declare an ICC
+ * OutputIntent. Without this, PDF/A output will not pass strict validators.
+ */
+function buildPdfaDefPs(iccPath) {
+  if (!iccPath) {
+    // No ICC found: emit an empty prelude. Ghostscript will still produce
+    // PDF/A with its built-in fallback, which passes looser validators.
+    return '%!\n% PDFA_def.ps — no explicit ICC profile available\n';
+  }
+
+  return `%!
+/ICCProfile (${iccPath}) def
+
+[/_objdef {icc_PDFA} /type /stream /OBJ pdfmark
+[{icc_PDFA} << /N 3 >> /PUT pdfmark
+[{icc_PDFA} ICCProfile (r) file /PUT pdfmark
+
+[/_objdef {OutputIntent_PDFA} /type /dict /OBJ pdfmark
+[{OutputIntent_PDFA} <<
+  /Type /OutputIntent
+  /S /GTS_PDFA1
+  /DestOutputProfile {icc_PDFA}
+  /OutputConditionIdentifier (sRGB IEC61966-2.1)
+  /RegistryName (http://www.color.org)
+>> /PUT pdfmark
+
+[{Catalog} << /OutputIntents [ {OutputIntent_PDFA} ] >> /PUT pdfmark
+`;
+}
+
+/**
+ * Run Ghostscript to convert an input PDF buffer to PDF/A.
+ * Supported levels: '1' (1b), '2' (2b), '3' (3b).
+ */
+async function convertToPdfA(inputBuffer, options = {}) {
+  const {
+    level = '2',
+    colorStrategy = 'UseDeviceIndependentColor',
+  } = options;
+
+  const safeLevel = ['1', '2', '3'].includes(String(level)) ? String(level) : '2';
+
+  const tempId = `pdfa_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = os.tmpdir();
+  const inputPath = path.join(tempDir, `${tempId}_in.pdf`);
+  const outputPath = path.join(tempDir, `${tempId}_out.pdf`);
+  const pdfaDefPath = path.join(tempDir, `${tempId}_pdfa_def.ps`);
+
+  await fs.writeFile(inputPath, inputBuffer);
+
+  const iccPath = await findIccProfile();
+  const pdfaDef = buildPdfaDefPs(iccPath);
+  await fs.writeFile(pdfaDefPath, pdfaDef);
+
+  const gsArgs = [
+    `-dPDFA=${safeLevel}`,
+    '-dBATCH',
+    '-dNOPAUSE',
+    '-dQUIET',
+    '-dSAFER',
+    `-sColorConversionStrategy=${colorStrategy}`,
+    '-dPDFACompatibilityPolicy=1',   // warn + continue instead of aborting
+    '-dEmbedAllFonts=true',
+    '-dSubsetFonts=true',
+    '-dCompressFonts=true',
+    '-dAutoRotatePages=/None',
+    '-sDEVICE=pdfwrite',
+    `-sOutputFile=${outputPath}`,
+    pdfaDefPath,
+    inputPath,
+  ];
+
+  return new Promise((resolve, reject) => {
+    const gs = spawn('gs', gsArgs);
+    let stderr = '';
+    gs.stderr.on('data', (d) => { stderr += d.toString(); });
+
+    gs.on('close', async (code) => {
+      try {
+        if (code === 0) {
+          const out = await fs.readFile(outputPath);
+          resolve(out);
+        } else {
+          reject(new Error(
+            `Ghostscript PDF/A conversion failed (code ${code}). ${stderr.trim().slice(0, 400)}`
+          ));
+        }
+      } catch (err) {
+        reject(err);
+      } finally {
+        await fs.unlink(inputPath).catch(() => {});
+        await fs.unlink(outputPath).catch(() => {});
+        await fs.unlink(pdfaDefPath).catch(() => {});
+      }
+    });
+
+    gs.on('error', (err) => reject(err));
+  });
+}
+
+
+// PDF to PDF/A — ISO 19005 archival format
+app.post('/api/convert/pdf-to-pdfa', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No PDF file uploaded.' });
+    }
+
+    const options = {
+      level: req.body.level || '2',
+      conformance: req.body.conformance || 'b',
+      colorStrategy: req.body.colorStrategy || 'UseDeviceIndependentColor',
+      title: req.body.title || '',
+      author: req.body.author || '',
+      subject: req.body.subject || '',
+      keywords: req.body.keywords || '',
+    };
+
+    const pdfaBuffer = await convertToPdfA(req.file.buffer, options);
+
+    const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
+    const levelLabel = `${options.level}${String(options.conformance).toLowerCase()}`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${originalName}_PDFA-${levelLabel}.pdf"`
+    );
+    res.setHeader('x-original-size', req.file.buffer.length.toString());
+    res.setHeader('x-pdfa-size', pdfaBuffer.length.toString());
+
+    return res.send(pdfaBuffer);
+  } catch (error) {
+    console.error('PDF/A conversion failed:', error);
+    return res.status(500).json({
+      error: error.message || 'Failed to convert PDF to PDF/A.',
+    });
+  }
+});
+                                                                                                                       
 // 5. Compress PDF Endpoint
 app.post('/api/compress-pdf', upload.single('file'), async (req, res) => {
   try {

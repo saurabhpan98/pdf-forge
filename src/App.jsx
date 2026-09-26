@@ -56,7 +56,7 @@ export default function App() {
   // Tool click handler — block "edit" on phones
   // -------------------------------------------------------------------------
   const handleToolSelect = (tool) => {
-    if ((tool.id === 'edit' || tool.id === 'edit-text') && isPhoneDevice()) {
+    if ((tool.id === 'edit-text') && isPhoneDevice()) {
       setShowMobileBlock(true);
       return;
     }
@@ -65,7 +65,7 @@ export default function App() {
 
     const handleLaunchStudio = (tool, sessionData) => {
     // Double-check mobile block for editing tools (belt + suspenders)
-    if ((tool.id === 'edit' || tool.id === 'edit-text') && isPhoneDevice()) {
+    if ((tool.id === 'edit-text') && isPhoneDevice()) {
       setActiveModalTool(null);
       setShowMobileBlock(true);
       return;

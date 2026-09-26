@@ -70,7 +70,7 @@ export const PDF_CATEGORIES = [
       { id: 'pdf-to-word', name: 'PDF to WORD', desc: 'Convert PDFs to editable Word documents.', icon: FileText, color: 'text-blue-600', bg: 'bg-blue-50', badge: 'Not Accurate' },
       { id: 'pdf-to-powerpoint', name: 'PDF to POWERPOINT', desc: 'Convert PDF files into PPTX slides.', icon: Presentation, color: 'text-orange-600', bg: 'bg-orange-50', badge: 'Not Accurate' },
       { id: 'pdf-to-excel', name: 'PDF to EXCEL', desc: 'Pull structured data straight into Excel sheets.', icon: FileSpreadsheet, color: 'text-green-600', bg: 'bg-green-50', badge: 'Not Accurate' },
-      { id: 'pdf-to-pdfa', name: 'PDF to PDF/A', desc: 'Convert to ISO-compliant archive formats.', icon: FileCheck, color: 'text-slate-600', bg: 'bg-slate-50', inactive: true, badge: 'Coming Soon' },
+      { id: 'pdf-to-pdfa', name: 'PDF to PDF/A', desc: 'Convert to ISO-compliant archive formats.', icon: FileCheck, color: 'text-slate-600', bg: 'bg-slate-50' },
     ],
   },
   {
@@ -90,7 +90,7 @@ export const PDF_CATEGORIES = [
     tools: [
       { id: 'unlock', name: 'Unlock PDF', desc: 'Remove passwords and permissions security.', icon: Unlock, color: 'text-blue-600', bg: 'bg-blue-50' },
       { id: 'protect', name: 'Protect PDF', desc: 'Encrypt files with strong password protection.', icon: ShieldCheck, color: 'text-sky-600', bg: 'bg-sky-50' },
-      { id: 'sign', name: 'Sign PDF', desc: 'Create digital signatures and sign agreements.', icon: PenTool, color: 'text-indigo-600', bg: 'bg-indigo-50', inactive: true, badge: 'Coming Soon' },
+      { id: 'sign', name: 'Sign PDF', desc: 'Create digital signatures and sign agreements.', icon: PenTool, color: 'text-indigo-600', bg: 'bg-indigo-50' },
       { id: 'redact', name: 'Redact PDF', desc: 'Permanently blackout sensitive information.', icon: EyeOff, color: 'text-slate-700', bg: 'bg-slate-50', inactive: true, badge: 'Coming Soon' },
       { id: 'compare', name: 'Compare PDF', desc: 'Side-by-side visual and text diff comparison.', icon: GitCompare, color: 'text-cyan-600', bg: 'bg-cyan-50', inactive: true, badge: 'Coming Soon' },
     ],
