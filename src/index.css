@@ -1,1 +1,207 @@
 @import "tailwindcss";
+
+/* =========================================================================
+   Global reset & typography
+   ========================================================================= */
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+::selection {
+  background: rgb(244 63 94 / 0.22);
+  color: rgb(15 23 42);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(203 213 225);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(148 163 184);
+  background-clip: content-box;
+}
+
+/* =========================================================================
+   Keyframes
+   ========================================================================= */
+@keyframes pf-fade-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pf-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes pf-scale-in {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes pf-slide-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pf-slide-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pf-float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50%      { transform: translateY(-10px) rotate(2deg); }
+}
+@keyframes pf-float-reverse {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50%      { transform: translateY(10px) rotate(-2deg); }
+}
+@keyframes pf-blob {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(30px, -40px) scale(1.1); }
+  66%      { transform: translate(-20px, 20px) scale(0.95); }
+}
+@keyframes pf-pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgb(244 63 94 / 0.45); }
+  70%  { box-shadow: 0 0 0 12px rgb(244 63 94 / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(244 63 94 / 0); }
+}
+@keyframes pf-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes pf-gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+@keyframes pf-scroll-progress {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+/* =========================================================================
+   Animation utilities
+   ========================================================================= */
+.pf-anim-fade-up    { animation: pf-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.pf-anim-fade-in    { animation: pf-fade-in 0.5s ease-out both; }
+.pf-anim-scale-in   { animation: pf-scale-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.pf-anim-slide-down { animation: pf-slide-down 0.35s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.pf-anim-slide-up   { animation: pf-slide-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.pf-anim-float      { animation: pf-float 6s ease-in-out infinite; }
+.pf-anim-float-r    { animation: pf-float-reverse 7s ease-in-out infinite; }
+.pf-anim-blob       { animation: pf-blob 18s ease-in-out infinite; }
+.pf-anim-pulse-ring { animation: pf-pulse-ring 2.4s infinite; }
+
+.pf-delay-1 { animation-delay: 0.05s; }
+.pf-delay-2 { animation-delay: 0.10s; }
+.pf-delay-3 { animation-delay: 0.15s; }
+.pf-delay-4 { animation-delay: 0.20s; }
+.pf-delay-5 { animation-delay: 0.25s; }
+.pf-delay-6 { animation-delay: 0.30s; }
+.pf-delay-7 { animation-delay: 0.35s; }
+.pf-delay-8 { animation-delay: 0.40s; }
+
+/* =========================================================================
+   Reusable visual patterns
+   ========================================================================= */
+
+/* Gradient text */
+.pf-gradient-text {
+  background: linear-gradient(135deg, #f43f5e 0%, #ec4899 45%, #8b5cf6 100%);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: pf-gradient-shift 6s ease infinite;
+}
+
+.pf-gradient-text-soft {
+  background: linear-gradient(135deg, #fb7185 0%, #a78bfa 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* Grid pattern background */
+.pf-grid-bg {
+  background-image:
+    linear-gradient(to right, rgb(226 232 240 / 0.35) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(226 232 240 / 0.35) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* Blurred color blobs */
+.pf-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+/* Glass surface */
+.pf-glass {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+}
+
+/* Interactive card baseline */
+.pf-card {
+  transition:
+    transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.25s ease,
+    background-color 0.25s ease;
+  will-change: transform;
+}
+.pf-card:hover {
+  transform: translateY(-4px);
+}
+
+/* Focus ring (accessible) */
+.pf-focus:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgb(244 63 94 / 0.18),
+    0 0 0 1.5px rgb(244 63 94);
+}
+
+/* Shimmer (progress / skeletons) */
+.pf-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(255 255 255 / 0.5) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: pf-shimmer 2s infinite;
+}
+
+/* Accordion slide */
+.pf-accordion-panel {
+  overflow: hidden;
+  transition: max-height 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.3s ease,
+              padding 0.3s ease;
+}
+
+/* Hide scrollbar utility */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

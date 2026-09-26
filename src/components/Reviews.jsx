@@ -41,97 +41,109 @@ const REVIEWS = [
     name: 'Kukku',
     role: 'Engineer',
     rating: 5,
-    comment: 'Every other tool on internet limits your productivity with subscriptions & seesions. Thanks to Saurabh & PDF Forge, for making it free and full of easy to work upon tools.',
+    comment: 'Every other tool limits productivity with subscriptions and sessions. Thanks to Saurabh and PDF Forge for making it free and easy to work with.',
     avatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=100&auto=format&fit=crop&q=80',
   },
 ];
 
 export default function Reviews() {
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [paused, setPaused] = useState(false);
 
-  // Auto-scroll carousel every 6 seconds
   useEffect(() => {
+    if (paused) return;
     const timer = setInterval(() => {
       setCurrentIndex((prev) => (prev + 1) % REVIEWS.length);
     }, 6000);
     return () => clearInterval(timer);
-  }, []);
+  }, [paused]);
 
-  const handlePrev = () => {
-    setCurrentIndex((prev) => (prev === 0 ? REVIEWS.length - 1 : prev - 1));
-  };
-
-  const handleNext = () => {
-    setCurrentIndex((prev) => (prev + 1) % REVIEWS.length);
-  };
+  const handlePrev = () => setCurrentIndex((prev) => (prev === 0 ? REVIEWS.length - 1 : prev - 1));
+  const handleNext = () => setCurrentIndex((prev) => (prev + 1) % REVIEWS.length);
 
   const review = REVIEWS[currentIndex];
 
   return (
-    <section className="py-16 bg-gradient-to-b from-slate-50 to-slate-100/80 border-t border-slate-200/80">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-        <h2 className="text-xs font-bold uppercase tracking-widest text-rose-500 mb-2">Loved by Users Worldwide</h2>
-        <h3 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-          What our community says about PDFForge
-        </h3>
+    <section
+      id="reviews"
+      className="relative py-20 border-t border-slate-200 overflow-hidden"
+    >
+      <div className="absolute inset-0 pf-grid-bg opacity-40 pointer-events-none" />
+      <div className="pf-blob w-96 h-96 bg-rose-300/30 -top-20 left-1/4 pf-anim-blob" aria-hidden />
+      <div className="pf-blob w-80 h-80 bg-indigo-300/30 bottom-0 right-1/4 pf-anim-blob" style={{ animationDelay: '-8s' }} aria-hidden />
 
-        {/* Carousel Card */}
-        <div className="mt-8 relative bg-white rounded-3xl p-8 sm:p-10 shadow-lg border border-slate-200/70 transition-all">
-          <Quote className="w-10 h-10 text-rose-100 absolute top-6 left-6 -z-0" />
+      <div
+        className="relative max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center"
+        onMouseEnter={() => setPaused(true)}
+        onMouseLeave={() => setPaused(false)}
+      >
+        <span className="inline-flex items-center px-3 py-1 bg-rose-50 border border-rose-100 text-rose-600 rounded-full text-[10px] font-black uppercase tracking-[0.15em] mb-4">
+          Loved by users worldwide
+        </span>
+        <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black text-slate-900 tracking-tight leading-tight">
+          What our community{' '}
+          <span className="pf-gradient-text-soft">says</span>
+        </h2>
 
-          <div className="relative z-10 flex flex-col items-center">
-            {/* Stars */}
-            <div className="flex space-x-1 mb-4">
+        <div className="mt-10 relative">
+          <div
+            key={currentIndex}
+            className="pf-anim-fade-up relative bg-white rounded-3xl p-8 sm:p-12 shadow-xl shadow-slate-200/60 border border-slate-100"
+          >
+            <div className="absolute -top-5 left-1/2 -translate-x-1/2 w-10 h-10 rounded-full bg-gradient-to-br from-rose-500 to-indigo-500 flex items-center justify-center shadow-lg">
+              <Quote className="w-4 h-4 text-white" />
+            </div>
+
+            <div className="flex justify-center space-x-1 mb-5">
               {[...Array(review.rating)].map((_, i) => (
                 <Star key={i} className="w-4 h-4 fill-amber-400 text-amber-400" />
               ))}
             </div>
 
-            {/* Testimonial */}
-            <p className="text-base sm:text-lg text-slate-700 font-medium italic max-w-2xl leading-relaxed">
+            <p className="text-base sm:text-lg lg:text-xl text-slate-700 font-medium italic max-w-2xl mx-auto leading-relaxed">
               "{review.comment}"
             </p>
 
-            {/* User Info */}
-            <div className="mt-6 flex items-center space-x-3.5">
+            <div className="mt-8 flex items-center justify-center space-x-3">
               <img
                 src={review.avatar}
                 alt={review.name}
-                className="w-12 h-12 rounded-full object-cover border-2 border-rose-400/30 shadow-sm"
+                className="w-12 h-12 rounded-full object-cover border-2 border-white shadow-md ring-2 ring-rose-100"
               />
               <div className="text-left">
-                <h4 className="font-bold text-slate-900 text-sm">{review.name}</h4>
-                <p className="text-xs text-slate-500">{review.role}</p>
+                <h4 className="font-black text-slate-900 text-sm">{review.name}</h4>
+                <p className="text-[11px] text-slate-500 font-semibold">{review.role}</p>
               </div>
             </div>
           </div>
 
-          {/* Carousel Arrows */}
           <button
             onClick={handlePrev}
-            className="absolute left-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition shadow-sm border border-slate-200/70"
-            title="Previous"
+            className="absolute left-0 sm:-left-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 transition shadow-lg border border-slate-200 flex items-center justify-center cursor-pointer active:scale-95"
+            aria-label="Previous review"
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
           <button
             onClick={handleNext}
-            className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition shadow-sm border border-slate-200/70"
-            title="Next"
+            className="absolute right-0 sm:-right-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 transition shadow-lg border border-slate-200 flex items-center justify-center cursor-pointer active:scale-95"
+            aria-label="Next review"
           >
             <ChevronRight className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Indicator Dots */}
-        <div className="flex justify-center space-x-2 mt-6">
+        <div className="flex justify-center space-x-2 mt-8">
           {REVIEWS.map((_, idx) => (
             <button
               key={idx}
               onClick={() => setCurrentIndex(idx)}
-              className={`h-2 rounded-full transition-all ${
-                currentIndex === idx ? 'w-6 bg-rose-500' : 'w-2 bg-slate-300 hover:bg-slate-400'
+              className={`h-1.5 rounded-full transition-all duration-300 cursor-pointer ${
+                currentIndex === idx
+                  ? 'w-8 bg-gradient-to-r from-rose-500 to-indigo-500'
+                  : 'w-1.5 bg-slate-300 hover:bg-slate-400'
               }`}
+              aria-label={`Go to review ${idx + 1}`}
             />
           ))}
         </div>

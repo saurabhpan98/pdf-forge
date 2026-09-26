@@ -2440,8 +2440,8 @@ export async function convertPdfToPdfA(file, options = {}) {
   if (options.subject) formData.append('subject', options.subject);
   if (options.keywords) formData.append('keywords', options.keywords);
 
-  //const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-pdfa`, {
-  const response = await fetch('/api/convert/pdf-to-pdfa', {
+  const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-pdfa`, {
+  //const response = await fetch('/api/convert/pdf-to-pdfa', {
     method: 'POST',
     body: formData,
   });
