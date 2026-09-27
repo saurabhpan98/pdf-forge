@@ -252,13 +252,14 @@ git push
 2. Connect your repository.
 3. Configure:
    | Settings | Value |
+   | -------- | ----- |
    | Name	| pdf-forge-backend |
    | Root Directory	| backend |
    | Runtime	| Docker |
    | Instance Type	| Free |
    | Health Check Path |	/ |
-4. Deploy. Render builds the Docker image (5–10 min on the first run due to LibreOffice).
-5. Copy the service URL — you'll need it for the frontend, e.g. ```https://pdf-forge-backend.onrender.com.```
+5. Deploy. Render builds the Docker image (5–10 min on the first run due to LibreOffice).
+6. Copy the service URL — you'll need it for the frontend, e.g. ```https://pdf-forge-backend.onrender.com.```
    
 **Frontend (GitHub Pages / Vercel):** Set VITE_API_BASE_URL=https://<your-backend-domain>.onrender.com in .env.production and deploy using npm run build.
 
@@ -268,12 +269,13 @@ Or you can also try Render static for frontend deployment
 2. Connect the same repository.
 3. Configure:
    | Setting	| Value |
+   | ------- | ----- |
    | Name	| pdf-forge-frontend | 
    | Branch	| main |
    | Root Directory	| (leave blank) |
    | Build Command	| npm install && npm run build |
    | Publish Directory	| dist |
-4. **Environment variables** (Settings → Environment):
+5. **Environment variables** (Settings → Environment):
 ```
 NODE_VERSION=22
 VITE_API_BASE_URL=https://pdf-forge-backend.onrender.com
