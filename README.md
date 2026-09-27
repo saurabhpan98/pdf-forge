@@ -198,15 +198,31 @@ npm run dev
 ```
 Vite starts on http://localhost:5173 and proxies ```/api/*``` requests to the backend on port 5000 (configured in ```vite.config.js```).
 
+### 3. Convenience: run both together
+The root package.json has a dev script that launches both processes concurrently:
+```
+npm run dev
+# → CLIENT  Vite ready on 5173
+# → SERVER  Conversion server running on port 5000
+```
+### 4. Build the production bundle
+```
+npm run build      # outputs to dist/
+npm run preview    # serves dist/ locally for verification
+```
+
 ## 🐳 Docker Deployment (Render / Cloud Containers)
 The backend ships with a ```Dockerfile``` that installs Node 20, Python 3, LibreOffice, Ghostscript, and the required font packages in one image. This is the recommended way to run the backend anywhere (Render, Fly.io, Railway, self-hosted VPS).
 Build and run the self-contained backend container:
 ```
 # Build the backend container image
-docker build -t pdf-tools-backend ./backend
+docker build -t pdf-forge-backend ./backend
 
 # Run the container exposing port 5000
-docker run -p 5000:5000 pdf-tools-backend
+docker run -p 5000:5000 pdf-forge-backend
+
+# Verify
+curl http://localhost:5000/
 ```
 The container is **stateless** — every request writes temp files under ```/tmp``` and removes them in a finally block. Nothing persists across restarts.
 
@@ -215,9 +231,70 @@ The container is **stateless** — every request writes temp files under ```/tmp
 **Backend (Render):** 
 Render's free tier is enough to host PDF Forge, but it requires **two separate services:** a Docker Web Service for the backend and a Static Site for the React frontend.
 
-In Render, create a new Web Service, link your repository, set the Runtime to Docker, and point the root directory to your backend/ folder. Render will build the container with LibreOffice installed automatically. Render binds to port 5000 automatically.
+### ⚠️ Free tier limitations
+1. **Spin-down:** services sleep after 15 min of inactivity → first request takes 30–60 s to wake up.
+2. **512 MB RAM, 0.1 vCPU per instance.** Simultaneous heavy conversions can be slow.
+3. **750 instance hours / month** — enough for one always-on service.
+4. **Ephemeral disk** — wiped on every deploy (irrelevant since the app is stateless).
 
+In Render, create a new Web Service, link your repository, set the Runtime to Docker, and point the root directory to your backend/ folder. Render will build the container with LibreOffice installed automatically. Render binds to port 5000 automatically. Step wise - 
+
+### Step 1 — Push to GitHub
+Make sure these files are committed:
+```
+git add Dockerfile backend/Dockerfile vite.config.js .nvmrc
+git commit -m "Prepare for Render deployment"
+git push
+```
+
+### Step 2 — Deploy the backend Web Service
+1. Render Dashboard → **New → Web Service.**
+2. Connect your repository.
+3. Configure:
+   | Settings | Value |
+   | Name	| pdf-forge-backend |
+   | Root Directory	| backend |
+   | Runtime	| Docker |
+   | Instance Type	| Free |
+   | Health Check Path |	/ |
+4. Deploy. Render builds the Docker image (5–10 min on the first run due to LibreOffice).
+5. Copy the service URL — you'll need it for the frontend, e.g. ```https://pdf-forge-backend.onrender.com.```
+   
 **Frontend (GitHub Pages / Vercel):** Set VITE_API_BASE_URL=https://<your-backend-domain>.onrender.com in .env.production and deploy using npm run build.
+
+Or you can also try Render static for frontend deployment
+### 1. Deploy the frontend Static Site on Render
+1. Render Dashboard → New → Static Site.
+2. Connect the same repository.
+3. Configure:
+   | Setting	| Value |
+   | Name	| pdf-forge-frontend | 
+   | Branch	| main |
+   | Root Directory	| (leave blank) |
+   | Build Command	| npm install && npm run build |
+   | Publish Directory	| dist |
+4. **Environment variables** (Settings → Environment):
+```
+NODE_VERSION=22
+VITE_API_BASE_URL=https://pdf-forge-backend.onrender.com
+```
+> ⚠️ Vite inlines env vars at build time. You must redeploy after adding them.
+5. **Redirects / Rewrites:** add a catch-all so client-side routing doesn't 404 on refresh:
+   | Source	| Destination	| Action |
+   | /*	| /index.html	| Rewrite |
+6. **Deploy.** The build takes ~2 min.
+
+### 2 — Kill the cold start (optional)
+Add a health check endpoint in server.js if you haven't already:
+```
+app.get('/health', (req, res) => res.status(200).send('OK'));
+```
+Then register it with UptimeRobot or cron-job.org at a **10-minute interval** to keep the container warm.
+
+### Final step — Verify
+1. Backend: ```https://pdf-forge-backend.onrender.com/health``` → should return ```OK```.
+2. Frontend: open your Static Site URL. DevTools → Console should show no 404s on ```assets/*.js```.
+3. End-to-end: run a server-side tool (e.g. **Word to PDF**). If it converts and downloads, the wiring is correct.
 
 ## 🔒 Security, Privacy & Processing Architecture
 PDF Forge is built around a simple promise: your documents remain yours.
