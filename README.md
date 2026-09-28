@@ -355,6 +355,17 @@ Office conversions, PDF/A, and in-place text editing run on the backend. These p
 * **Conversion & response:** The engine processes the in-memory stream; Express streams the output back via res.send(buffer). Node's garbage collector releases the memory as soon as the response closes.
 * **Client handling:** The browser receives the response as a Blob URL (URL.createObjectURL), which is revoked the moment the modal closes or the user navigates away.
 
+### AI features are 100% client-side
+
+The **AI Summarizer** and **Translate PDF** tools run entirely in your browser using Transformers.js and WebAssembly/WebGPU. Your document text is:
+
+* **Never uploaded** — inference happens on your device
+* **Never logged** — there is no server involvement
+* **Never sent to OpenAI, Anthropic, Google, or any LLM provider**
+* **Cached locally** — the model weights are stored in the browser's Cache API and can be cleared at any time from the storage icon in each tool
+
+This is architectural privacy: the design makes it impossible for your data to leave your device, regardless of what any policy says.
+
 ### Additional guarantees
 * **No database.** There is nothing persistent to leak.
 * **No analytics.** No fingerprinting, no ads, no third-party tracking.
