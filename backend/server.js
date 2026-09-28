@@ -285,8 +285,23 @@ app.post('/api/convert/excel-to-pdf', upload.single('file'), async (req, res) =>
   }
 });
 
-// Ghostscript PDF Compression Function
-async function compressWithGhostscript(inputBuffer, qualityLevel = 45) {
+// ---------------------------------------------------------------------------
+// Ghostscript PDF compression — Smart Compress (Condense-style)
+//
+// Preserves text as selectable, recompresses images at target DPI,
+// subsets fonts, and removes metadata/thumbnails. This is what BentoPDF
+// calls "Condense".
+// ---------------------------------------------------------------------------
+async function compressWithGhostscript(inputBuffer, options = {}) {
+  const {
+    dpi = 96,
+    quality = 75,
+    grayscale = false,
+    removeMetadata = true,
+    subsetFonts = true,
+    removeThumbnails = true,
+  } = options;
+
   const tempId = `compress_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   const tempDir = os.tmpdir();
   const inputPath = path.join(tempDir, `${tempId}_in.pdf`);
@@ -294,48 +309,80 @@ async function compressWithGhostscript(inputBuffer, qualityLevel = 45) {
 
   await fs.writeFile(inputPath, inputBuffer);
 
-  // Map compression percentage slider to Ghostscript PDF settings
-  let pdfSetting = '/ebook'; // Balanced (150 DPI)
-  if (qualityLevel <= 30) {
-    pdfSetting = '/printer'; // High quality (300 DPI)
-  } else if (qualityLevel >= 65) {
-    pdfSetting = '/screen'; // Maximum compression (72 DPI)
-  }
-
   const gsArgs = [
     '-sDEVICE=pdfwrite',
-    '-dCompatibilityLevel=1.4',
-    `-dPDFSETTINGS=${pdfSetting}`,
+    '-dCompatibilityLevel=1.5',
     '-dNOPAUSE',
     '-dQUIET',
     '-dBATCH',
+    '-dSAFER',
+
+    // ---- Image downsampling ----
+    '-dDownsampleColorImages=true',
+    `-dColorImageResolution=${dpi}`,
+    `-dGrayImageResolution=${dpi}`,
+    `-dMonoImageResolution=${Math.min(dpi * 2, 600)}`,
+    '-dColorImageDownsampleType=/Bicubic',
+    '-dGrayImageDownsampleType=/Bicubic',
+    '-dMonoImageDownsampleType=/Subsample',
+    '-dColorImageDownsampleThreshold=1.0',
+    '-dGrayImageDownsampleThreshold=1.0',
+    '-dMonoImageDownsampleThreshold=1.0',
+
+    // ---- JPEG encoding with user-selected quality ----
+    '-dAutoFilterColorImages=false',
+    '-dAutoFilterGrayImages=false',
+    '-dColorImageFilter=/DCTEncode',
+    '-dGrayImageFilter=/DCTEncode',
+    '-dJPEGQ=' + quality,
+    '-dEncodeColorImages=true',
+    '-dEncodeGrayImages=true',
+
+    // ---- Color space ----
+    grayscale ? '-sColorConversionStrategy=Gray' : '-sColorConversionStrategy=RGB',
+    '-dProcessColorModel=' + (grayscale ? '/DeviceGray' : '/DeviceRGB'),
+
+    // ---- Structural optimizations ----
+    '-dDetectDuplicateImages=true',
+    '-dCompressFonts=true',
+    subsetFonts ? '-dSubsetFonts=true' : '-dSubsetFonts=false',
+    '-dEmbedAllFonts=true',
+    removeThumbnails ? '-dPreserveEmbeddedThumbnails=false' : '-dPreserveEmbeddedThumbnails=true',
+
+    // ---- Metadata ----
+    removeMetadata ? '-dPreserveMetadata=false' : '-dPreserveMetadata=true',
+    '-dPreserveMarkedContent=true',
+    '-dPreserveAnnots=true',
+    '-dPreserveHalftoneInfo=false',
+
     `-sOutputFile=${outputPath}`,
     inputPath,
   ];
 
   return new Promise((resolve, reject) => {
     const gs = spawn('gs', gsArgs);
+    let stderr = '';
+    gs.stderr.on('data', (d) => { stderr += d.toString(); });
 
     gs.on('close', async (code) => {
       try {
         if (code === 0) {
-          const compressedBuffer = await fs.readFile(outputPath);
-          resolve(compressedBuffer);
+          const out = await fs.readFile(outputPath);
+          resolve(out);
         } else {
-          reject(new Error(`Ghostscript exited with code ${code}`));
+          reject(new Error(
+            `Ghostscript compression failed (code ${code}). ${stderr.slice(0, 300)}`
+          ));
         }
       } catch (err) {
         reject(err);
       } finally {
-        // Cleanup temp files immediately
         await fs.unlink(inputPath).catch(() => {});
         await fs.unlink(outputPath).catch(() => {});
       }
     });
 
-    gs.on('error', (err) => {
-      reject(err);
-    });
+    gs.on('error', (err) => reject(err));
   });
 }
 
@@ -517,30 +564,86 @@ app.post('/api/convert/pdf-to-pdfa', upload.single('file'), async (req, res) => 
 });
                                                                                                                        
 // 5. Compress PDF Endpoint
+// ---------------------------------------------------------------------------
+// Compress PDF — two algorithms, monotonic guarantee
+// ---------------------------------------------------------------------------
 app.post('/api/compress-pdf', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No PDF file uploaded.' });
+  }
+
+  const algorithm = req.body.algorithm || 'condense';   // 'condense' | 'photon'
+  const dpi = parseInt(req.body.dpi || '96', 10);
+  const quality = parseInt(req.body.quality || '75', 10);
+  const grayscale = req.body.grayscale === 'true';
+  const removeMetadata = req.body.removeMetadata !== 'false';
+  const subsetFonts = req.body.subsetFonts !== 'false';
+  const removeThumbnails = req.body.removeThumbnails !== 'false';
+
+  const originalBuffer = req.file.buffer;
+  const originalSize = originalBuffer.length;
+
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No PDF file uploaded.' });
+    let compressedBuffer;
+
+    if (algorithm === 'photon') {
+      // ---- Deep Compress: rasterize via PyMuPDF ----
+      const tempId = `deep_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      const tempDir = path.join(os.tmpdir(), tempId);
+      const inputPath = path.join(tempDir, 'input.pdf');
+      const outputPath = path.join(tempDir, 'output.pdf');
+      const payloadPath = path.join(tempDir, 'payload.json');
+      const pyScript = path.join(__dirname, 'convert_compress_pdf.py');
+
+      await fs.mkdir(tempDir, { recursive: true });
+      await fs.writeFile(inputPath, originalBuffer);
+      await fs.writeFile(payloadPath, JSON.stringify({
+        dpi, quality, grayscale, removeMetadata,
+      }), 'utf-8');
+
+      await new Promise((resolve, reject) => {
+        const py = spawn('python3', [pyScript, inputPath, outputPath, payloadPath]);
+        let stderr = '';
+        py.stderr.on('data', (d) => {
+          const s = d.toString();
+          stderr += s;
+          process.stderr.write(`[py-compress] ${s}`);
+        });
+        py.on('close', (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(`Deep compression failed (code ${code}): ${stderr.slice(0, 300)}`));
+        });
+        py.on('error', (err) => reject(err));
+      });
+
+      compressedBuffer = await fs.readFile(outputPath);
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    } else {
+      // ---- Smart Compress: Ghostscript ----
+      compressedBuffer = await compressWithGhostscript(originalBuffer, {
+        dpi, quality, grayscale, removeMetadata, subsetFonts, removeThumbnails,
+      });
     }
 
-    const compressionPercent = parseInt(req.body.compressionPercent || '45', 10);
-    const originalSize = req.file.buffer.length;
-
-    const compressedBuffer = await compressWithGhostscript(req.file.buffer, compressionPercent);
-
-    // Fallback if the file is already maximally compressed
-    const finalBuffer = compressedBuffer.length < originalSize ? compressedBuffer : req.file.buffer;
+    // ---- Monotonic guarantee: never return a larger file ----
+    const finalBuffer = compressedBuffer.length < originalSize
+      ? compressedBuffer
+      : originalBuffer;
 
     const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="compressed_${originalName}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${originalName}_compressed.pdf"`);
     res.setHeader('x-original-size', originalSize.toString());
     res.setHeader('x-compressed-size', finalBuffer.length.toString());
+    res.setHeader('x-algorithm', algorithm);
+    res.setHeader('x-was-compressed', compressedBuffer.length < originalSize ? '1' : '0');
 
     return res.send(finalBuffer);
   } catch (error) {
-    console.error('Ghostscript compression error:', error);
-    return res.status(500).json({ error: 'Failed to compress PDF.' });
+    console.error('PDF compression error:', error);
+    return res.status(500).json({
+      error: error.message || 'Failed to compress PDF.',
+    });
   }
 });
 

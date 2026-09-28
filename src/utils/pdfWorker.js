@@ -48,7 +48,20 @@ export async function checkPdfPassword(file) {
   }
 }
 
-export async function compressPDF(file, compressionLevel = 45) {
+/* =========================================================================
+ *  COMPRESS PDF
+ *
+ *  Two algorithms:
+ *    • 'condense' — Smart Compress. Preserves selectable text, recompresses
+ *      images at target DPI, subsets fonts, removes metadata. Best for
+ *      text-heavy documents.
+ *    • 'photon'   — Deep Compress. Rasterizes each page to JPEG at the
+ *      target DPI. Best for scanned or photo-heavy documents.
+ *
+ *  The backend guarantees monotonic compression: if the output would be
+ *  larger than the input, the original file is returned unchanged.
+ * ========================================================================= */
+export async function compressPDF(file, options = {}) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
     const err = new Error(`"${file.name}" is password-protected and cannot be processed.`);
@@ -56,11 +69,28 @@ export async function compressPDF(file, compressionLevel = 45) {
     throw err;
   }
 
+  const {
+    algorithm = 'condense',
+    dpi = 96,
+    quality = 75,
+    grayscale = false,
+    removeMetadata = true,
+    subsetFonts = true,
+    removeThumbnails = true,
+  } = options;
+
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('compressionPercent', compressionLevel.toString());
+  formData.append('algorithm', algorithm);
+  formData.append('dpi', String(dpi));
+  formData.append('quality', String(quality));
+  formData.append('grayscale', grayscale ? 'true' : 'false');
+  formData.append('removeMetadata', removeMetadata ? 'true' : 'false');
+  formData.append('subsetFonts', subsetFonts ? 'true' : 'false');
+  formData.append('removeThumbnails', removeThumbnails ? 'true' : 'false');
 
   const response = await fetch(`${API_BASE_URL}/api/compress-pdf`, {
+  //const response = await fetch('/api/compress-pdf', {
     method: 'POST',
     body: formData,
   });
@@ -73,6 +103,7 @@ export async function compressPDF(file, compressionLevel = 45) {
   const pdfBlob = await response.blob();
   const originalSizeHeader = response.headers.get('x-original-size');
   const compressedSizeHeader = response.headers.get('x-compressed-size');
+  const wasCompressed = response.headers.get('x-was-compressed') === '1';
 
   const origSize = originalSizeHeader ? parseInt(originalSizeHeader, 10) : file.size;
   const compSize = compressedSizeHeader ? parseInt(compressedSizeHeader, 10) : pdfBlob.size;
@@ -82,6 +113,8 @@ export async function compressPDF(file, compressionLevel = 45) {
     filename: `compressed_${file.name}`,
     originalSize: origSize,
     compressedSize: compSize,
+    wasCompressed,
+    algorithm,
   };
 }
 

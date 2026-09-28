@@ -97,6 +97,7 @@ import AISummarizerStudio from './AISummarizerStudio';
 import TranslatePdfStudio from './TranslatePdfStudio';
 import MetadataEditorStudio from './MetadataEditorStudio';
 import RedactPdfStudio from './RedactPdfStudio';
+import CompressPdfStudio from './CompressPdfStudio';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
   const [files, setFiles] = useState(initialFiles || []);
@@ -1606,6 +1607,17 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   if (tool?.id === 'redact') {
     return (
       <RedactPdfStudio
+        tool={tool}
+        file={files[0]}
+        onBack={onBack}
+      />
+    );
+  }
+
+  // --- Compress PDF ---
+  if (tool?.id === 'compress') {
+    return (
+      <CompressPdfStudio
         tool={tool}
         file={files[0]}
         onBack={onBack}
