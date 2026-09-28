@@ -247,7 +247,7 @@ function AnimatedInfoButton({ onClick }) {
   return (
     <button
       onClick={onClick}
-      className="pf-anim-pulse-ring relative w-9 h-9 rounded-full bg-gradient-to-br from-cyan-500 to-cyan-600 hover:from-cyan-600 hover:to-cyan-700 text-white flex items-center justify-center shadow-md shadow-cyan-500/30 transition-all cursor-pointer active:scale-95 shrink-0"
+      className="pf-anim-pulse-ring relative w-6 h-6 ml-1 rounded-full bg-gradient-to-br from-cyan-500 to-cyan-600 hover:from-cyan-600 hover:to-cyan-700 text-white flex items-center justify-center shadow-md shadow-cyan-500/30 transition-all cursor-pointer active:scale-95 shrink-0"
       title="What is metadata?"
       aria-label="Show metadata info"
     >

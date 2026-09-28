@@ -1638,7 +1638,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
             className="flex items-center space-x-1.5 text-slate-600 hover:text-slate-900 font-semibold text-xs sm:text-sm px-2.5 py-1 rounded-xl hover:bg-slate-100 transition cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span>Back to Home</span>
+            <span className="hidden sm:inline">Back to Home</span>
           </button>
 
           <div className="flex items-center space-x-2 sm:space-x-3">
@@ -1646,7 +1646,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
               {tool && <tool.icon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
             </div>
             <h2 className="text-xs sm:text-base font-bold text-slate-900 truncate max-w-[150px] sm:max-w-none">
-              {tool?.name} Workspace
+              {tool?.name}
             </h2>
           </div>
 
