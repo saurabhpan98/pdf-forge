@@ -55,7 +55,7 @@
 * **Unlock PDF** : Unlock a password protect or encrypted PDF once and for all 
 * **Protect PDF** : Protect your PDF with password you want 
 * **Sign PDF** : Draw, type (5 cursive fonts), or upload a signature, place it anywhere on any page, and burn it into the PDF with an aspect-ratio-locked resize workflow. 
-* **Redact PDF** : (Coming Soon)
+* **Redact PDF** : True content-stream redaction powered by PyMuPDF. Draw rectangles over sensitive areas and permanently remove the underlying text glyphs, image pixels, and covered vector graphics — not just cover them. Drawings are stored in PDF-point space, so they survive zoom, page navigation, and multi-page editing. Includes fill-color options (black / red / white), per-page redaction lists with live mini-previews, and a "Continue editing" flow that preserves every drawn rectangle when you want to apply again.
 * **Compare PDF** : (Coming Soon)
 
 ### PDF Intelligence
@@ -110,6 +110,7 @@
 ```text
 ├── backend/
 │   ├── convert_edit_pdf.py         # In-place PDF text editing (PyMuPDF background restoration)
+│   ├── convert_redact_pdf.py       # True content-stream redaction (text, images, vector graphics)
 │   ├── pdf_inplace_editor.py       # Content-stream Tj/TJ rewriter for span edits
 │   ├── convert_pdf2docx.py         # PDF → DOCX reconstruction engine
 │   ├── convert_pdf2excel.py        # PDF → XLSX table extraction engine
@@ -133,6 +134,7 @@
 │   │   ├── PdfiumEditStudio.jsx    # Annotation editor backed by EmbedPDF/PDFium
 │   │   ├── PdfiumTextEditOverlay.jsx
 │   │   ├── PrivacySection.jsx      # Dark privacy + security pillars
+│   │   ├── RedactPdfStudio.jsx     # True PDF redaction editor (marquee + PyMuPDF backend)
 │   │   ├── Reviews.jsx             # Testimonial carousel
 │   │   ├── SignPdfStudio.jsx       # Signature placement editor
 │   │   ├── TextFormatSidebar.jsx   # Font / color / spacing / alignment controls
@@ -371,6 +373,24 @@ This is architectural privacy: the design makes it impossible for your data to l
 ### Metadata editing is client-side too
 
 The **Edit Metadata** tool reads and writes PDF document properties entirely in the browser via `pdf-lib`. No network request is made — the file is loaded into memory, modified, and returned as a Blob URL that you download locally. Removing personal information (author names, creator software, keywords) from a PDF is fully covered by this offline workflow.
+
+### Redaction is real, not visual
+
+The **Redact PDF** tool performs genuine content-stream removal — the same standard Adobe Acrobat uses. Drawing a black rectangle on top of text is not redaction: the underlying bytes remain in the file and can be recovered by copy-paste, text extraction, or hex inspection.
+
+Our implementation calls PyMuPDF's `add_redact_annot()` and `apply_redactions()` on the server, which:
+
+* **Removes every text glyph** intersecting a redaction rectangle from the PDF content stream.
+* **Scrubs image pixels** at the covered region (`PDF_REDACT_IMAGE_PIXELS`) so photos and scans cannot be reconstructed.
+* **Drops covered vector graphics** — lines, paths, and fills fully inside the rectangle disappear.
+* **Rewrites the page content stream** without the removed operations, then saves with `garbage=4, deflate=True, clean=True` for maximum scrubbing.
+
+To verify: run `pdftotext` on the output and search for the redacted content. It will return nothing. Files are processed in-memory on the server and discarded the moment the download finishes — same ephemeral model as every other server-side tool.
+
+>NOTE: Troubleshooting in Redaction 
+**Redaction appears to leave a visible "shadow" of the text**
+The output is correct — the underlying content is gone, but a PDF reader may still show a faint artifact if the original page had anti-aliased text and the redaction rectangle was drawn too tight. Solution: extend the rectangle by a few pixels on each side so it fully covers the glyph bounding boxes. You can drag a rectangle's edges after drawing it, or delete and redraw it slightly larger before applying.
+
 
 ### Additional guarantees
 * **No database.** There is nothing persistent to leak.
