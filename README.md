@@ -387,7 +387,7 @@ Our implementation calls PyMuPDF's `add_redact_annot()` and `apply_redactions()`
 
 To verify: run `pdftotext` on the output and search for the redacted content. It will return nothing. Files are processed in-memory on the server and discarded the moment the download finishes — same ephemeral model as every other server-side tool.
 
->NOTE: Troubleshooting in Redaction 
+**NOTE:** Troubleshooting in Redaction 
 **Redaction appears to leave a visible "shadow" of the text**
 The output is correct — the underlying content is gone, but a PDF reader may still show a faint artifact if the original page had anti-aliased text and the redaction rectangle was drawn too tight. Solution: extend the rectangle by a few pixels on each side so it fully covers the glyph bounding boxes. You can drag a rectangle's edges after drawing it, or delete and redraw it slightly larger before applying.
 
