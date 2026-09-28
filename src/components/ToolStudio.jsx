@@ -177,6 +177,23 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   const [draggedPageIndex, setDraggedPageIndex] = useState(null);
   const [draggedImageIndex, setDraggedImageIndex] = useState(null);
 
+   // ---- Touch-based page reordering for Organize PDF ----
+  // HTML5 native drag-and-drop (draggable / onDragStart / onDrop) does not
+  // fire on touch devices, so we run a parallel long-press drag system for
+  // touch/pen input. Desktop mouse still uses the HTML5 path unchanged.
+  const [touchDragFromIndex, setTouchDragFromIndex] = useState(null);
+  const [touchDragOverIndex, setTouchDragOverIndex] = useState(null);
+  const organizeGridRef = useRef(null);
+  const touchDragRef = useRef({
+    timer: null,
+    active: false,
+    fromIndex: null,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+  });
+
+
   // Image to PDF Options State
   const [imageToPdfOptions, setImageToPdfOptions] = useState({
     orientation: 'portrait',
@@ -599,6 +616,20 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   const isOverflowingY = displayHeight > availH;
   const isOverflowingX = displayWidth > availW;
 
+  // Block page scroll while a touch drag is active, so the user's finger
+  // moves the card instead of the viewport.
+  useEffect(() => {
+    if (touchDragFromIndex === null) return;
+    const el = organizeGridRef.current;
+    if (!el) return;
+    const prevent = (e) => {
+      if (touchDragRef.current.active) e.preventDefault();
+    };
+    el.addEventListener('touchmove', prevent, { passive: false });
+    return () => el.removeEventListener('touchmove', prevent);
+  }, [touchDragFromIndex]);
+
+
   useEffect(() => {
     if (isPageLevelTool && files.length > 0) {
       if (tool?.id === 'crop') {
@@ -844,6 +875,96 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
     setThumbnails(reordered);
     setDraggedPageIndex(null);
+  };
+
+  // ---- Touch drag handlers ----
+  const handlePageTouchStart = (e, index) => {
+    if (e.pointerType === 'mouse') return; // Desktop → HTML5 DnD
+    if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+
+    // Capture the pointer so subsequent move/up events target this card even
+    // if the finger leaves the card's bounds.
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+
+    const ref = touchDragRef.current;
+    ref.startX = e.clientX;
+    ref.startY = e.clientY;
+    ref.fromIndex = index;
+    ref.pointerId = e.pointerId;
+    ref.active = false;
+
+    if (ref.timer) window.clearTimeout(ref.timer);
+    ref.timer = window.setTimeout(() => {
+      ref.timer = null;
+      ref.active = true;
+      setTouchDragFromIndex(index);
+      setTouchDragOverIndex(index);
+      try {
+        if (navigator.vibrate) navigator.vibrate(15);
+      } catch { /* ignore */ }
+    }, 280);
+  };
+
+  const handlePageTouchMove = (e) => {
+    const ref = touchDragRef.current;
+    if (ref.pointerId === null || e.pointerId !== ref.pointerId) return;
+
+    if (!ref.active) {
+      // Cancel the long-press if the finger is scrolling
+      const dx = e.clientX - ref.startX;
+      const dy = e.clientY - ref.startY;
+      if (Math.hypot(dx, dy) > 10) {
+        if (ref.timer) { window.clearTimeout(ref.timer); ref.timer = null; }
+        ref.pointerId = null;
+        ref.fromIndex = null;
+      }
+      return;
+    }
+
+    // Active drag: find the card under the finger
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const card = el && el.closest ? el.closest('[data-organize-card-index]') : null;
+    if (card) {
+      const overIdx = parseInt(card.getAttribute('data-organize-card-index'), 10);
+      if (!isNaN(overIdx) && overIdx !== touchDragOverIndex) {
+        setTouchDragOverIndex(overIdx);
+      }
+    }
+  };
+
+  const handlePageTouchEnd = (e) => {
+    const ref = touchDragRef.current;
+    if (ref.pointerId === null || e.pointerId !== ref.pointerId) return;
+
+    if (ref.timer) { window.clearTimeout(ref.timer); ref.timer = null; }
+
+    const wasActive = ref.active;
+    const fromIdx = ref.fromIndex;
+    const toIdx = touchDragOverIndex;
+
+    ref.active = false;
+    ref.fromIndex = null;
+    ref.pointerId = null;
+
+    setTouchDragFromIndex(null);
+    setTouchDragOverIndex(null);
+
+    if (wasActive && fromIdx != null && toIdx != null && fromIdx !== toIdx) {
+      const reordered = [...thumbnails];
+      const [moved] = reordered.splice(fromIdx, 1);
+      reordered.splice(toIdx, 0, moved);
+      setThumbnails(reordered);
+    }
+  };
+
+  const handlePageTouchCancel = (e) => {
+    const ref = touchDragRef.current;
+    if (ref.timer) { window.clearTimeout(ref.timer); ref.timer = null; }
+    ref.active = false;
+    ref.fromIndex = null;
+    ref.pointerId = null;
+    setTouchDragFromIndex(null);
+    setTouchDragOverIndex(null);
   };
 
   const rotateSinglePage = (index, delta = 90) => {
@@ -3310,40 +3431,122 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
             {/* 7. Organize PDF Studio */}
             {tool?.id === 'organize' && (
-              <div className="bg-white border border-slate-200 rounded-3xl p-6 space-y-6 shadow-sm">
-                <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
-                  <span>Drag & drop pages to rearrange. Hover to rotate or delete individual pages.</span>
-                  <button onClick={() => changeFileInputRef.current?.click()} className="text-amber-700 hover:text-amber-800 font-bold flex items-center space-x-1 cursor-pointer">
+              <div className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-6 space-y-4 sm:space-y-6 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-500 font-medium">
+                  <span className="flex items-center gap-1.5">
+                    <span className="hidden sm:inline">Drag &amp; drop pages to rearrange.</span>
+                    <span className="sm:hidden">Press and hold a page to pick it up, then drag to reorder.</span>
+                  </span>
+                  <button onClick={() => changeFileInputRef.current?.click()} className="text-amber-700 hover:text-amber-800 font-bold flex items-center space-x-1 cursor-pointer self-start sm:self-auto">
                     <RefreshCw className="w-3.5 h-3.5" /><span>Change File</span>
                   </button>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                  {thumbnails.map((thumb, idx) => (
-                    <div
-                      key={thumb.id}
-                      draggable
-                      onDragStart={(e) => handlePageDragStart(e, idx)}
-                      onDragOver={handlePageDragOver}
-                      onDrop={(e) => handlePageDrop(e, idx)}
-                      className={`group relative rounded-2xl border-2 bg-slate-50 overflow-hidden cursor-grab active:cursor-grabbing p-2 shadow-xs transition ${
-                        draggedPageIndex === idx ? 'opacity-40 border-amber-400' : 'border-slate-200 hover:border-amber-400'
-                      }`}
-                    >
-                      <div className="p-2 flex items-center justify-center min-h-[160px]">
-                        <img src={thumb.dataUrl} alt={`Page ${idx + 1}`} style={{ transform: `rotate(${thumb.rotation}deg)` }} className="max-h-36 object-contain transition duration-200" />
+
+                {/* Touch-drag hint (mobile only, appears briefly) */}
+                {touchDragFromIndex === null && (
+                  <div className="sm:hidden flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-100 rounded-2xl text-[11px] text-amber-900">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                    <span>Long-press any page for a moment — it will lift, then drag to its new spot.</span>
+                  </div>
+                )}
+
+                <div
+                  ref={organizeGridRef}
+                  className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4"
+                >
+                  {thumbnails.map((thumb, idx) => {
+                    const isDesktopDragging = draggedPageIndex === idx;
+                    const isTouchDragging = touchDragFromIndex === idx;
+                    const isTouchOver =
+                      touchDragFromIndex !== null &&
+                      touchDragOverIndex === idx &&
+                      touchDragFromIndex !== idx;
+                    const anyDragActive = touchDragFromIndex !== null;
+
+                    return (
+                      <div
+                        key={thumb.id}
+                        data-organize-card-index={idx}
+                        draggable
+                        onDragStart={(e) => handlePageDragStart(e, idx)}
+                        onDragOver={handlePageDragOver}
+                        onDrop={(e) => handlePageDrop(e, idx)}
+                        onPointerDown={(e) => handlePageTouchStart(e, idx)}
+                        onPointerMove={handlePageTouchMove}
+                        onPointerUp={handlePageTouchEnd}
+                        onPointerCancel={handlePageTouchCancel}
+                        onContextMenu={(e) => {
+                          // Prevent iOS/Android long-press callout while a drag is active
+                          if (touchDragRef.current.active) e.preventDefault();
+                        }}
+                        style={{
+                          touchAction: anyDragActive ? 'none' : 'manipulation',
+                          WebkitTouchCallout: anyDragActive ? 'none' : 'default',
+                          WebkitUserSelect: anyDragActive ? 'none' : 'auto',
+                          userSelect: anyDragActive ? 'none' : 'auto',
+                        }}
+                        className={`group relative rounded-2xl border-2 bg-slate-50 overflow-hidden cursor-grab active:cursor-grabbing p-2 transition-all duration-200 ${
+                          isDesktopDragging || isTouchDragging
+                            ? 'opacity-40 border-amber-500 scale-95 shadow-inner'
+                            : isTouchOver
+                            ? 'border-amber-500 ring-4 ring-amber-400/40 scale-105 bg-amber-50 shadow-lg z-10'
+                            : 'border-slate-200 hover:border-amber-400 shadow-xs'
+                        }`}
+                      >
+                        <div className="p-2 flex items-center justify-center min-h-[140px] sm:min-h-[160px]">
+                          <img
+                            src={thumb.dataUrl}
+                            alt={`Page ${idx + 1}`}
+                            style={{ transform: `rotate(${thumb.rotation}deg)` }}
+                            className="max-h-32 sm:max-h-36 object-contain transition duration-200 pointer-events-none"
+                            draggable={false}
+                          />
+                        </div>
+
+                        <div className="absolute top-2 right-2 flex space-x-1 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition">
+                          <button
+                            type="button"
+                            onClick={() => rotateSinglePage(idx, 90)}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            className="p-1.5 bg-white text-slate-700 rounded-lg shadow hover:text-amber-600 cursor-pointer touch-manipulation"
+                            title="Rotate 90°"
+                          >
+                            <RotateCw className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteSinglePage(idx)}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            className="p-1.5 bg-white text-slate-700 rounded-lg shadow hover:text-red-600 cursor-pointer touch-manipulation"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="px-2 py-1 bg-white border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold text-slate-500">
+                          <span>Pos: {idx + 1}</span>
+                          {thumb.rotation !== 0 && <span className="text-amber-600 font-bold">{thumb.rotation}°</span>}
+                        </div>
+
+                        {/* "Lifted" badge shown while a card is being dragged on touch */}
+                        {isTouchDragging && (
+                          <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex justify-center pointer-events-none">
+                            <span className="px-2 py-0.5 bg-amber-500 text-white text-[9px] font-black uppercase tracking-wider rounded-full shadow pf-anim-slide-down">
+                              Moving…
+                            </span>
+                          </div>
+                        )}
                       </div>
-                      <div className="absolute top-2 right-2 flex space-x-1 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition">
-                        <button onClick={() => rotateSinglePage(idx, 90)} className="p-1.5 bg-white text-slate-700 rounded-lg shadow hover:text-amber-600 cursor-pointer"><RotateCw className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => deleteSinglePage(idx)} className="p-1.5 bg-white text-slate-700 rounded-lg shadow hover:text-red-600 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
-                      </div>
-                      <div className="px-2 py-1 bg-white border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold text-slate-500">
-                        <span>Pos: {idx + 1}</span>
-                        {thumb.rotation !== 0 && <span className="text-amber-600 font-bold">{thumb.rotation}°</span>}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
-                <button onClick={executeAction} disabled={isProcessing} className="w-full py-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer">
+
+                <button
+                  onClick={executeAction}
+                  disabled={isProcessing}
+                  className="w-full py-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 cursor-pointer active:scale-[0.99]"
+                >
                   {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Save Organized PDF</span>}
                 </button>
               </div>
