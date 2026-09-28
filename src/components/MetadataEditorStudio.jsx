@@ -3,7 +3,7 @@ import {
   ArrowLeft, Loader2, Download, Check, AlertCircle, Info,
   FileText, BookOpen, User, Hash, Building2, Calendar, Clock,
   X as CloseIcon, RotateCcw, Wand2, Copy, FileSignature, ShieldCheck,
-  Upload, Save, BookMarked, Tag, Layers, Lock,
+  Upload, Save, BookMarked, Tag, Layers, Lock, Eye, EyeOff,
 } from 'lucide-react';
 import { readPdfMetadata, updatePdfMetadata, checkPdfPassword } from '../utils/pdfWorker';
 
@@ -32,14 +32,18 @@ function formatDateHuman(isoLocal) {
 
 // ---------------------------------------------------------------------------
 // Reusable field
+//
+// When `showOriginal` is true, an inline "Was: <original>" line appears under
+// the input so the user can compare current vs. original at a glance.
 // ---------------------------------------------------------------------------
 function MetadataField({
   icon: Icon, label, hint, placeholder, value, originalValue,
-  onChange, type = 'text', maxLength, delayClass = '',
+  onChange, type = 'text', maxLength, delayClass = '', showOriginal = false,
+  isDate = false,
 }) {
   const isChanged = (value || '') !== (originalValue || '');
   const hasValue = Boolean(value && value.length);
-  const isDate = type === 'datetime-local';
+  const dateInput = isDate || type === 'datetime-local';
 
   return (
     <div className={`pf-anim-fade-up ${delayClass}`}>
@@ -63,7 +67,7 @@ function MetadataField({
           placeholder={placeholder}
           maxLength={maxLength}
           className={`w-full px-3.5 py-3 min-h-[44px] bg-white border rounded-2xl text-sm font-medium transition-all focus:outline-none pf-focus ${
-            isDate ? 'pr-12' : (hasValue ? 'pr-11' : '')
+            dateInput ? 'pr-12' : (hasValue ? 'pr-11' : '')
           } ${
             isChanged
               ? 'border-amber-300 ring-2 ring-amber-200/40 focus:border-amber-400'
@@ -75,7 +79,7 @@ function MetadataField({
             type="button"
             onClick={() => onChange('')}
             className={`absolute top-1/2 -translate-y-1/2 p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition cursor-pointer ${
-              isDate ? 'right-9' : 'right-2'
+              dateInput ? 'right-9' : 'right-2'
             }`}
             title="Clear field"
             aria-label={`Clear ${label}`}
@@ -84,6 +88,28 @@ function MetadataField({
           </button>
         )}
       </div>
+
+      {/* Inline "Was: …" — only when Show originals is on */}
+      {showOriginal && (
+        <div className="mt-1.5 pf-anim-slide-down">
+          <div className="flex items-start gap-1.5 text-[10.5px] leading-snug">
+            <span className={`font-black uppercase tracking-wider shrink-0 ${
+              isChanged ? 'text-amber-700' : 'text-slate-400'
+            }`}>
+              Was:
+            </span>
+            <span className={`truncate ${
+              !originalValue
+                ? 'text-slate-400 italic'
+                : isChanged
+                  ? 'text-amber-900 font-semibold'
+                  : 'text-slate-500'
+            }`}>
+              {originalValue || 'empty'}
+            </span>
+          </div>
+        </div>
+      )}
 
       <div className="flex items-center justify-between mt-1.5 gap-2">
         <p className="text-[10px] text-slate-400 leading-snug truncate">{hint}</p>
@@ -132,7 +158,6 @@ function MetadataInfoModal({ onClose }) {
         onClick={(e) => e.stopPropagation()}
         className="pf-anim-slide-up sm:pf-anim-scale-in bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-slate-200 max-w-lg w-full max-h-[92vh] flex flex-col overflow-hidden"
       >
-        {/* Header */}
         <div className="px-5 sm:px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
           <div className="flex items-center space-x-2.5">
             <div className="w-9 h-9 rounded-xl bg-cyan-50 text-cyan-600 flex items-center justify-center">
@@ -152,7 +177,6 @@ function MetadataInfoModal({ onClose }) {
           </button>
         </div>
 
-        {/* Body */}
         <div className="px-5 sm:px-6 py-5 space-y-4 overflow-y-auto">
           <p className="text-[12.5px] text-slate-600 leading-relaxed">
             Every PDF carries a small, invisible block of information about itself — its{' '}
@@ -203,7 +227,6 @@ function MetadataInfoModal({ onClose }) {
           </div>
         </div>
 
-        {/* Footer */}
         <div className="px-5 sm:px-6 py-4 border-t border-slate-100 shrink-0">
           <button
             onClick={onClose}
@@ -218,7 +241,7 @@ function MetadataInfoModal({ onClose }) {
 }
 
 // ---------------------------------------------------------------------------
-// Animated info button (always pulsing)
+// Animated info button
 // ---------------------------------------------------------------------------
 function AnimatedInfoButton({ onClick }) {
   return (
@@ -228,7 +251,6 @@ function AnimatedInfoButton({ onClick }) {
       title="What is metadata?"
       aria-label="Show metadata info"
     >
-      {/* Rotating gradient ring */}
       <span
         className="absolute -inset-1 rounded-full pointer-events-none"
         style={{
@@ -239,7 +261,6 @@ function AnimatedInfoButton({ onClick }) {
         }}
         aria-hidden
       />
-      {/* Secondary orbiting dot */}
       <span className="absolute inset-0 pointer-events-none pf-anim-orbit-slow">
         <span className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-white shadow" />
       </span>
@@ -269,7 +290,6 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
   const [showOriginals, setShowOriginals] = useState(false);
   const [showInfoModal, setShowInfoModal] = useState(false);
 
-  // ---- Load metadata ----
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -307,7 +327,6 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
     return () => { cancelled = true; };
   }, [activeFile]);
 
-  // ---- Change detection ----
   const changedFields = useMemo(() => {
     if (!original) return [];
     const keys = ['title', 'author', 'subject', 'keywords', 'creator', 'producer', 'creationDate', 'modificationDate'];
@@ -316,7 +335,6 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
 
   const hasChanges = changedFields.length > 0;
 
-  // ---- Handlers ----
   const updateField = (key) => (value) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
     setSavedNotice(null);
@@ -384,7 +402,6 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
     onBack();
   };
 
-  // ---- Render ----
   return (
     <div className="bg-slate-50 min-h-screen flex flex-col">
       <input
@@ -397,7 +414,6 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
 
       {showInfoModal && <MetadataInfoModal onClose={() => setShowInfoModal(false)} />}
 
-      {/* Header */}
       <header className="sticky top-0 shrink-0 bg-white/90 backdrop-blur-md border-b border-slate-200 z-30">
         <div className="max-w-[1400px] mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-2 sm:gap-3">
           <button
@@ -423,17 +439,29 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
             <AnimatedInfoButton onClick={() => setShowInfoModal(true)} />
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            {hasChanges && (
-              <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold rounded-full pf-anim-slide-down">
+          <div className="hidden sm:flex items-center gap-2 shrink-0">
+            {hasChanges && !result && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold rounded-full pf-anim-slide-down">
                 <Wand2 className="w-3 h-3" />
                 {changedFields.length} change{changedFields.length === 1 ? '' : 's'}
               </span>
             )}
+
+            {result && (
+              <a
+                href={result.url}
+                download={result.filename}
+                className="pf-anim-slide-down flex items-center gap-1.5 px-3 sm:px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-sm transition cursor-pointer active:scale-[0.98]"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download PDF</span>
+              </a>
+            )}
+
             <button
               onClick={handleSave}
               disabled={isSaving || !hasChanges || isLoading}
-              className="hidden sm:flex px-3 sm:px-4 py-2 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs sm:text-sm font-bold rounded-xl shadow-sm items-center space-x-1.5 transition cursor-pointer"
+              className="flex px-3 sm:px-4 py-2 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs sm:text-sm font-bold rounded-xl shadow-sm items-center space-x-1.5 transition cursor-pointer"
             >
               {isSaving ? (
                 <><Loader2 className="w-3.5 h-3.5 animate-spin" /><span>Saving…</span></>
@@ -446,7 +474,6 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
       </header>
 
       <main className="flex-1 max-w-[1400px] mx-auto w-full px-3 sm:px-4 py-4 sm:py-6 pb-28 sm:pb-6">
-        {/* Banners */}
         {errorMsg && (
           <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-900 flex items-start space-x-2.5 pf-anim-slide-down">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
@@ -464,7 +491,7 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 lg:gap-5">
-          {/* ============ LEFT COLUMN — FORM ============ */}
+          {/* LEFT — FORM */}
           <div className="lg:col-span-8 order-2 lg:order-1">
             <div className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-6 shadow-sm">
               {/* Card header */}
@@ -481,14 +508,21 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
                   <button
                     type="button"
                     onClick={() => setShowOriginals((v) => !v)}
-                    className={`text-[10px] font-bold px-2.5 py-1.5 rounded-lg transition cursor-pointer ${
+                    aria-pressed={showOriginals}
+                    className={`text-[10px] font-bold px-2.5 py-1.5 rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer ${
                       showOriginals
-                        ? 'bg-cyan-50 text-cyan-700 border border-cyan-200'
-                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+                        ? 'bg-cyan-50 text-cyan-700 border-cyan-200 shadow-sm'
+                        : 'bg-white text-slate-500 border-slate-200 hover:text-slate-700 hover:border-slate-300'
                     }`}
                   >
-                    {showOriginals ? 'Hide originals' : 'Show originals'}
+                    {showOriginals ? (
+                      <EyeOff className="w-3 h-3" />
+                    ) : (
+                      <Eye className="w-3 h-3" />
+                    )}
+                    <span>{showOriginals ? 'Hide originals' : 'Show originals'}</span>
                   </button>
+
                   {hasChanges && (
                     <button
                       type="button"
@@ -525,6 +559,7 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
                         hint="Document title shown by readers"
                         maxLength={500}
                         delayClass="pf-delay-1"
+                        showOriginal={showOriginals}
                       />
                       <MetadataField
                         icon={User}
@@ -536,6 +571,7 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
                         hint="Person or organization that wrote it"
                         maxLength={500}
                         delayClass="pf-delay-2"
+                        showOriginal={showOriginals}
                       />
                     </div>
                   </div>
@@ -556,6 +592,7 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
                         hint="One-line summary stored in the file"
                         maxLength={1000}
                         delayClass="pf-delay-3"
+                        showOriginal={showOriginals}
                       />
                       <MetadataField
                         icon={Hash}
@@ -567,6 +604,7 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
                         hint="Comma-separated — preserved exactly as typed"
                         maxLength={500}
                         delayClass="pf-delay-4"
+                        showOriginal={showOriginals}
                       />
                     </div>
                   </div>
@@ -587,6 +625,7 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
                         hint="Original authoring software"
                         maxLength={200}
                         delayClass="pf-delay-5"
+                        showOriginal={showOriginals}
                       />
                       <MetadataField
                         icon={Copy}
@@ -598,6 +637,7 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
                         hint="PDF generation engine"
                         maxLength={200}
                         delayClass="pf-delay-6"
+                        showOriginal={showOriginals}
                       />
                     </div>
                   </div>
@@ -615,12 +655,14 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
                         originalValue={original?.creationDate}
                         onChange={updateField('creationDate')}
                         type="datetime-local"
+                        isDate
                         hint={
                           draft.creationDate
                             ? formatDateHuman(draft.creationDate)
                             : 'When the document was originally created'
                         }
                         delayClass="pf-delay-7"
+                        showOriginal={showOriginals}
                       />
                       <MetadataField
                         icon={Clock}
@@ -629,51 +671,24 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
                         originalValue={original?.modificationDate}
                         onChange={updateField('modificationDate')}
                         type="datetime-local"
+                        isDate
                         hint={
                           draft.modificationDate
                             ? formatDateHuman(draft.modificationDate)
                             : 'Defaults to now when saved'
                         }
                         delayClass="pf-delay-8"
+                        showOriginal={showOriginals}
                       />
                     </div>
                   </div>
-
-                  {/* Originals preview */}
-                  {showOriginals && original && (
-                    <div className="pt-5 border-t border-slate-100 pf-anim-slide-down">
-                      <p className="text-[9px] font-black uppercase tracking-[0.15em] text-slate-400 mb-3">
-                        Original values (read-only)
-                      </p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2">
-                        {[
-                          ['Title', original.title],
-                          ['Author', original.author],
-                          ['Subject', original.subject],
-                          ['Keywords', original.keywords],
-                          ['Creator', original.creator],
-                          ['Producer', original.producer],
-                          ['Created', original.creationDate ? formatDateHuman(original.creationDate) : ''],
-                          ['Modified', original.modificationDate ? formatDateHuman(original.modificationDate) : ''],
-                        ].map(([k, v]) => (
-                          <div key={k} className="flex items-baseline gap-2 text-[11px]">
-                            <span className="text-slate-400 font-bold shrink-0 min-w-[70px]">{k}:</span>
-                            <span className={`truncate ${v ? 'text-slate-700' : 'text-slate-300 italic'}`}>
-                              {v || 'not set'}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
             </div>
           </div>
 
-          {/* ============ RIGHT COLUMN — DOC + RESULT ============ */}
+          {/* RIGHT — DOC + RESULT */}
           <div className="lg:col-span-4 order-1 lg:order-2 space-y-4">
-            {/* Document card */}
             <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm pf-anim-fade-up">
               <div className="flex items-center gap-2 mb-3 pb-3 border-b border-slate-100">
                 <div className="w-9 h-9 rounded-xl bg-cyan-50 text-cyan-600 flex items-center justify-center shrink-0">
@@ -725,7 +740,6 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
               </button>
             </div>
 
-            {/* Save result */}
             {result && (
               <div className="bg-white border border-emerald-200 rounded-3xl p-5 shadow-sm pf-anim-scale-in">
                 <div className="flex items-center gap-2 mb-3">
@@ -775,6 +789,18 @@ export default function MetadataEditorStudio({ tool, file, onBack }) {
             >
               <RotateCcw className="w-4 h-4" />
             </button>
+
+            {result && (
+              <a
+                href={result.url}
+                download={result.filename}
+                className="pf-anim-slide-up flex-1 h-12 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-sm font-bold shadow-md shadow-emerald-600/20 transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-[0.98]"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download</span>
+              </a>
+            )}
+
             <button
               type="button"
               onClick={handleSave}
