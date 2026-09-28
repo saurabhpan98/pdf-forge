@@ -1,5 +1,14 @@
 # 📄 PDF Forge
-A modern, high-performance web application and desktop suite for converting, manipulating, compressing, and organizing PDF documents and Office files. Built with a React + Vite frontend and Node, Express + Python backend engine.
+> A modern, high-performance web application and desktop suite for converting, manipulating, compressing, and organizing PDF documents and Office files. Built with a React + Vite frontend and Node, Express + Python backend engine.
+
+<p align="center">
+  <img src="https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white" alt="Docker Pulls">
+  <img src="https://img.shields.io/badge/Vite-8-646cff?logo=vite&logoColor=white" alt="Docker Pulls">
+  <img src="https://img.shields.io/badge/Tailwind-v4-38bdf8?logo=tailwindcss&logoColor=white" alt="Docker Pulls">
+  <img src="https://img.shields.io/badge/Node.js-20+-339933?logo=node.js&logoColor=white" alt="Docker Pulls">
+  <img src="https://img.shields.io/badge/Python-3.10+-3776ab?logo=python&logoColor=white" alt="Docker Pulls">
+  <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="Docker Pulls">  
+</p>
 
 ---
 
@@ -48,10 +57,14 @@ A modern, high-performance web application and desktop suite for converting, man
 * **Redact PDF** : (Coming Soon)
 * **Compare PDF** : (Coming Soon)
 
-### PDF Intelligence 
-* **AI Summarizer** : Summarize your PDF with AI tool without going through a long set of pages
-* **Translate PDF** : Translate a PDF from one to other language 
-* **PDF to markdown** : Convert PDF content to markdown extension 
+### PDF Intelligence
+| Tool | Description |
+|---|---|
+| **AI Summarizer** | On-device summarization using Transformers.js. Three depth modes (Quick / Standard / Deep) with map-reduce chunking for long documents. Runs entirely in your browser — files never leave your device. |
+| **Translate PDF** | Translate documents into 14+ languages using NLLB-200 or Opus-MT models. Paragraph-aware translation preserves structure. Also runs entirely client-side. |
+| **PDF to Markdown** | Convert structured PDFs into clean GitHub-Flavored Markdown with table and heading preservation. |
+
+**AI tools run fully in-browser** via WebAssembly and (where available) WebGPU. No API keys, no server round-trip, no rate limits. Models download once and are cached locally — you can clear them any time from the storage icon in each AI tool's header.
 
 ---
 
@@ -66,6 +79,8 @@ A modern, high-performance web application and desktop suite for converting, man
 * **Image cropping:** ```react-image-crop```
 * **OCR (client-side):** ```tesseract.js```
 * **Archives:** ```jszip```
+* **On-device AI:** `@huggingface/transformers` (Transformers.js) — WebGPU accelerated with WASM fallback
+*-* **AI models used:** `Xenova/distilbart-cnn-12-6` (summarization), `Xenova/nllb-200-distilled-600M` + per-language `Xenova/opus-mt-*` (translation)
 
 ### Backend
 * **Runtime:** Node.js 20+ / Express 5
@@ -104,6 +119,10 @@ A modern, high-performance web application and desktop suite for converting, man
 ├── src/
 │   ├── components/
 |   |   ├── AboutSection.jsx        # About PDF Forge + values grid
+│   │   ├── AICacheManager.jsx      # Modal for inspecting / clearing AI model storage
+│   │   ├── AISummarizerStudio.jsx  # On-device PDF summarizer UI
+│   │   ├── AIWorkingCard.jsx       # Animated loading state for AI tasks
+│   │   ├── TranslatePdfStudio.jsx  # On-device translation UI
 │   │   ├── EditPdfStudio.jsx       # Advanced in-place text editor (PyMuPDF powered)
 │   │   ├── FAQSection.jsx          # Accordion FAQ section
 │   │   ├── Footer.jsx              # Footer with quick tools, sections, resources
@@ -120,9 +139,14 @@ A modern, high-performance web application and desktop suite for converting, man
 │   │   └── ToolStudio.jsx          # Full-screen workspace for all 25+ tools
 |   ├── data/
 |   │   └── pdfTools.jsx         # all pdf tools entry
+│   ├── hooks/
+│   │   └── useAIWorker.js          # Web Worker bridge for AI tasks
 │   ├── utils/
+│   │   ├── aiCacheManager.js       # Cache API stats + clearing for AI models
 │   │   ├── pageOcrReader.js        # Tesseract-based OCR helper (upscale + contrast)
 │   │   └── pdfWorker.js         # Client-side processing & backend API client
+│   ├── workers/
+│   │   └── ai.worker.js            # Transformers.js pipeline (summarize + translate)
 │   ├── App.jsx                  # Main dashboard layout
 │   ├── index.css                # Global Tailwind CSS styles
 │   └── main.jsx                 # Application entry point
@@ -198,14 +222,25 @@ npm run dev
 ```
 Vite starts on http://localhost:5173 and proxies ```/api/*``` requests to the backend on port 5000 (configured in ```vite.config.js```).
 
-### 3. Convenience: run both together
+### 3. AI tools (no setup required)
+
+`@huggingface/transformers` is a regular npm dependency, so `npm install` is all you need. The AI models download on first use and are cached in the browser:
+
+* **Summarizer** — ~250 MB (`distilbart-cnn-12-6`, quantized)
+* **Translator** — ~50 MB for common pairs via Opus-MT, ~600 MB for NLLB fallback
+
+Model downloads run once per browser. To free the space, open either AI tool and click the **storage icon** in the header → **Clear cache**. The next run re-downloads.
+
+**WebGPU support:** If your browser exposes a WebGPU adapter (Chrome 113+ with hardware acceleration enabled), the models run on GPU and are roughly **5–10× faster**. Otherwise they fall back to WebAssembly on CPU. Both paths produce identical output — the header badge shows which is active (`GPU` or `CPU`).
+
+### 4. Convenience: run both together
 The root package.json has a dev script that launches both processes concurrently:
 ```
 npm run dev
 # → CLIENT  Vite ready on 5173
 # → SERVER  Conversion server running on port 5000
 ```
-### 4. Build the production bundle
+### 5. Build the production bundle
 ```
 npm run build      # outputs to dist/
 npm run preview    # serves dist/ locally for verification
