@@ -95,6 +95,7 @@ import EditPdfStudio from './EditPdfStudio';
 import SignPdfStudio from './SignPdfStudio';
 import AISummarizerStudio from './AISummarizerStudio';
 import TranslatePdfStudio from './TranslatePdfStudio';
+import MetadataEditorStudio from './MetadataEditorStudio';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
   const [files, setFiles] = useState(initialFiles || []);
@@ -1462,6 +1463,16 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   if (tool?.id === 'sign') {
     return (
       <SignPdfStudio
+        tool={tool}
+        file={files[0]}
+        onBack={onBack}
+      />
+    );
+  }
+
+  if (tool?.id === 'metadata') {
+    return (
+      <MetadataEditorStudio
         tool={tool}
         file={files[0]}
         onBack={onBack}

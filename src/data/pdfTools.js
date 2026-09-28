@@ -31,6 +31,7 @@ import {
   Sparkles,
   Languages,
   FileDown,
+  Info,
 } from 'lucide-react';
 
 export const PDF_CATEGORIES = [
@@ -83,6 +84,7 @@ export const PDF_CATEGORIES = [
       { id: 'watermark', name: 'Add watermark', desc: 'Stamp text or image watermarks across pages.', icon: Stamp, color: 'text-fuchsia-600', bg: 'bg-fuchsia-50' },
       { id: 'crop', name: 'Crop PDF', desc: 'Trim margins and modify page visible area.', icon: Crop, color: 'text-pink-500', bg: 'bg-pink-50' },
       { id: 'forms', name: 'PDF Forms', desc: 'Fill out interactive forms and checkboxes.', icon: FormInput, color: 'text-violet-600', bg: 'bg-violet-50' },
+      { id: 'metadata', name: 'Edit Metadata', desc: 'View and edit document properties — title, author, keywords, dates.', icon: Info, color: 'text-cyan-600', bg: 'bg-cyan-50' },
     ],
   },
   {

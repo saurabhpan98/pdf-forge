@@ -2541,3 +2541,117 @@ export async function signPdf(file, signatures, options = {}) {
     compressedSize: pdfBytes.byteLength,
   };
 }
+
+/* =========================================================================
+ *  PDF METADATA — read & write document properties
+ *
+ *  Uses pdf-lib's Info dictionary API for the standard fields, and drops to
+ *  low-level PDFName/PDFString access for the Keywords field so we can
+ *  preserve user-entered commas instead of the space-joined format
+ *  pdf-lib's setKeywords() produces.
+ *
+ *  All processing is client-side. No upload, no server round-trip.
+ * ========================================================================= */
+export async function readPdfMetadata(file) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+
+  const toIsoLocal = (d) => {
+    if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+    // Format as YYYY-MM-DDTHH:mm for <input type="datetime-local">
+    const pad = (n) => String(n).padStart(2, '0');
+    return (
+      d.getFullYear() +
+      '-' + pad(d.getMonth() + 1) +
+      '-' + pad(d.getDate()) +
+      'T' + pad(d.getHours()) +
+      ':' + pad(d.getMinutes())
+    );
+  };
+
+  return {
+    title: pdfDoc.getTitle() || '',
+    author: pdfDoc.getAuthor() || '',
+    subject: pdfDoc.getSubject() || '',
+    keywords: pdfDoc.getKeywords() || '',
+    creator: pdfDoc.getCreator() || '',
+    producer: pdfDoc.getProducer() || '',
+    creationDate: toIsoLocal(pdfDoc.getCreationDate()),
+    modificationDate: toIsoLocal(pdfDoc.getModificationDate()),
+    pageCount: pdfDoc.getPageCount(),
+    fileSize: file.size,
+  };
+}
+
+export async function updatePdfMetadata(file, metadata) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+  const infoDict = pdfDoc.getInfoDict();
+
+  // Helper: set value if non-empty, delete the key otherwise.
+  const setOrDelete = (pdfKey, value) => {
+    const name = PDFName.of(pdfKey);
+    if (value != null && String(value).trim()) {
+      infoDict.set(name, PDFString.of(String(value).trim()));
+    } else {
+      try { infoDict.delete(name); } catch { /* key didn't exist */ }
+    }
+  };
+
+  // ---- Text fields ----
+  setOrDelete('Title', metadata.title);
+  setOrDelete('Author', metadata.author);
+  setOrDelete('Subject', metadata.subject);
+  setOrDelete('Keywords', metadata.keywords);   // comma-separated as entered
+  setOrDelete('Creator', metadata.creator);
+  setOrDelete('Producer', metadata.producer);
+
+  // ---- Dates ----
+  // pdf-lib's setCreationDate produces the correct PDF date format.
+  const dateName = (key) => PDFName.of(key);
+
+  if (metadata.creationDate) {
+    const d = new Date(metadata.creationDate);
+    if (!isNaN(d.getTime())) {
+      pdfDoc.setCreationDate(d);
+    } else {
+      try { infoDict.delete(dateName('CreationDate')); } catch { /* ignore */ }
+    }
+  } else {
+    try { infoDict.delete(dateName('CreationDate')); } catch { /* ignore */ }
+  }
+
+  if (metadata.modificationDate) {
+    const d = new Date(metadata.modificationDate);
+    if (!isNaN(d.getTime())) {
+      pdfDoc.setModificationDate(d);
+    }
+  } else {
+    // No user-supplied date — stamp "now" so the reader knows it changed.
+    pdfDoc.setModificationDate(new Date());
+  }
+
+  const pdfBytes = await pdfDoc.save({ useObjectStreams: true });
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+
+  return {
+    blob: new Blob([pdfBytes], { type: 'application/pdf' }),
+    filename: `${baseName}_metadata.pdf`,
+    originalSize: file.size,
+    compressedSize: pdfBytes.byteLength,
+  };
+}
