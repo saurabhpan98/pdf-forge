@@ -49,6 +49,7 @@
 * **Edit PDF** : Full-featured annotation editor built on the EmbedPDF / PDFium WASM engine. Add text boxes, highlights, images, shapes (rectangle, ellipse, line, arrow, triangle, diamond), freehand drawings, and redactions.
 * **Edit PDF Text** : In-place editing of existing text using a PyMuPDF text-free background restoration pipeline — preserves colored backgrounds, gradients, and images without painting white boxes. Includes background OCR to recover garbled ToUnicode mappings. Desktop only.
 * **PDF Forms** : Detect, fill, and create interactive AcroForm fields (text, checkbox, radio, dropdown, listbox, signature).
+* **Edit Metadata** : View and edit document properties — Title, Author, Subject, Keywords, Creator, Producer, and creation/modification dates. Inline "Was: …" comparison, per-field change badges, and full client-side processing via `pdf-lib`.
 
 ### PDF Security 
 * **Unlock PDF** : Unlock a password protect or encrypted PDF once and for all 
@@ -127,6 +128,7 @@
 │   │   ├── FAQSection.jsx          # Accordion FAQ section
 │   │   ├── Footer.jsx              # Footer with quick tools, sections, resources
 │   │   ├── Header.jsx              # Sticky nav with mega-dropdown + mobile drawer
+│   │   ├── MetadataEditorStudio.jsx # Read & edit PDF document properties (pdf-lib)
 │   │   ├── MobileNotSupportedModal.jsx
 │   │   ├── PdfiumEditStudio.jsx    # Annotation editor backed by EmbedPDF/PDFium
 │   │   ├── PdfiumTextEditOverlay.jsx
@@ -365,6 +367,10 @@ The **AI Summarizer** and **Translate PDF** tools run entirely in your browser u
 * **Cached locally** — the model weights are stored in the browser's Cache API and can be cleared at any time from the storage icon in each tool
 
 This is architectural privacy: the design makes it impossible for your data to leave your device, regardless of what any policy says.
+
+### Metadata editing is client-side too
+
+The **Edit Metadata** tool reads and writes PDF document properties entirely in the browser via `pdf-lib`. No network request is made — the file is loaded into memory, modified, and returned as a Blob URL that you download locally. Removing personal information (author names, creator software, keywords) from a PDF is fully covered by this offline workflow.
 
 ### Additional guarantees
 * **No database.** There is nothing persistent to leak.
