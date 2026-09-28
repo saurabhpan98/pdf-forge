@@ -2688,8 +2688,8 @@ export async function redactPdf(file, redactions, options = {}) {
     redactions,
   }));
 
-  //const response = await fetch(`${API_BASE_URL}/api/redact-pdf`, {
-  const response = await fetch('/api/redact-pdf', {
+  const response = await fetch(`${API_BASE_URL}/api/redact-pdf`, {
+  //const response = await fetch('/api/redact-pdf', {
     method: 'POST',
     body: formData,
   });
