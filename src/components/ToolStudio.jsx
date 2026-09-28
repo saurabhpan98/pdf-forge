@@ -93,6 +93,8 @@ import {
 import PdfiumEditStudio from './PdfiumEditStudio';
 import EditPdfStudio from './EditPdfStudio';
 import SignPdfStudio from './SignPdfStudio';
+import AISummarizerStudio from './AISummarizerStudio';
+import TranslatePdfStudio from './TranslatePdfStudio';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
   const [files, setFiles] = useState(initialFiles || []);
@@ -1465,6 +1467,14 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
         onBack={onBack}
       />
     );
+  }
+
+  if (tool?.id === 'summarizer') {
+    return <AISummarizerStudio tool={tool} file={files[0]} onBack={onBack} />;
+  }
+
+  if (tool?.id === 'translate') {
+      return <TranslatePdfStudio tool={tool} file={files[0]} onBack={onBack} />;
   }
 
   return (

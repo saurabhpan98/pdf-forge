@@ -9,6 +9,7 @@ import MobileNotSupportedModal from './components/MobileNotSupportedModal';
 import AboutSection from './components/AboutSection';
 import PrivacySection from './components/PrivacySection';
 import FAQSection from './components/FAQSection';
+import { getAICacheStats } from './utils/aiCacheManager';
 import { PDF_CATEGORIES } from './data/pdfTools';
 import {
   Search, Lock, Sparkles, Server, Zap, ShieldCheck, Globe, Cpu,
@@ -181,6 +182,22 @@ export default function App() {
   const [activeModalTool, setActiveModalTool] = useState(null);
   const [activeStudioSession, setActiveStudioSession] = useState(null);
   const [showMobileBlock, setShowMobileBlock] = useState(false);
+  const [showCachePrompt, setShowCachePrompt] = useState(false);
+
+  useEffect(() => {
+    // Only check once per session, and only if the user has used the app before
+    const CHECK_KEY = 'pf_cache_check_done';
+    if (sessionStorage.getItem(CHECK_KEY)) return;
+    sessionStorage.setItem(CHECK_KEY, '1');
+
+    (async () => {
+      try {
+        const { bytes } = await getAICacheStats();
+        const THRESHOLD = 500 * 1024 * 1024; // 500 MB
+        if (bytes >= THRESHOLD) setShowCachePrompt(true);
+      } catch { /* ignore */ }
+    })();
+  }, []);
 
   const filteredCategories = useMemo(() => {
     if (!searchQuery.trim()) return PDF_CATEGORIES;
@@ -310,6 +327,25 @@ export default function App() {
         <PrivacySection />
         <Reviews />
         <FAQSection />
+        {showCachePrompt && (
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3 text-xs">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-bold text-amber-900">AI models are using significant storage</p>
+                <p className="text-amber-800 mt-0.5">
+                  Cached models occupy space on your device. Open any AI tool and click the storage icon to clear them.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowCachePrompt(false)}
+                className="text-amber-700 hover:text-amber-900 font-bold text-[11px] shrink-0 cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
       </main>
 
       <Footer />
