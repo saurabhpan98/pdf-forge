@@ -159,6 +159,22 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   const [draggedMergeIndex, setDraggedMergeIndex] = useState(null);
   const [isLoadingMergePreviews, setIsLoadingMergePreviews] = useState(false);
 
+  // ---- Touch-based merge-card reordering ----
+  // HTML5 native drag-and-drop does not fire on touch devices, so we run
+  // a parallel long-press drag system for touch/pen input. Desktop mouse
+  // still uses the HTML5 path unchanged.
+  const [touchMergeFromIndex, setTouchMergeFromIndex] = useState(null);
+  const [touchMergeOverIndex, setTouchMergeOverIndex] = useState(null);
+  const mergeGridRef = useRef(null);
+  const touchMergeDragRef = useRef({
+    timer: null,
+    active: false,
+    fromIndex: null,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+  });
+
   // Page-selector & Visual tools
   const isPageLevelTool =
     tool?.id === 'remove' ||
@@ -630,6 +646,17 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     return () => el.removeEventListener('touchmove', prevent);
   }, [touchDragFromIndex]);
 
+  // Block page scroll while a merge-card touch drag is active.
+  useEffect(() => {
+    if (touchMergeFromIndex === null) return;
+    const el = mergeGridRef.current;
+    if (!el) return;
+    const prevent = (e) => {
+      if (touchMergeDragRef.current.active) e.preventDefault();
+    };
+    el.addEventListener('touchmove', prevent, { passive: false });
+    return () => el.removeEventListener('touchmove', prevent);
+  }, [touchMergeFromIndex]);
 
   useEffect(() => {
     if (isPageLevelTool && files.length > 0) {
@@ -812,6 +839,93 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
     setMergeCards(reordered);
     setFiles(reordered.map((c) => c.file));
     setDraggedMergeIndex(null);
+  };
+
+  // ---- Touch drag handlers for merge cards ----
+  const handleMergeTouchStart = (e, index) => {
+    if (e.pointerType === 'mouse') return;
+    if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+
+    const ref = touchMergeDragRef.current;
+    ref.startX = e.clientX;
+    ref.startY = e.clientY;
+    ref.fromIndex = index;
+    ref.pointerId = e.pointerId;
+    ref.active = false;
+
+    if (ref.timer) window.clearTimeout(ref.timer);
+    ref.timer = window.setTimeout(() => {
+      ref.timer = null;
+      ref.active = true;
+      setTouchMergeFromIndex(index);
+      setTouchMergeOverIndex(index);
+      try {
+        if (navigator.vibrate) navigator.vibrate(15);
+      } catch { /* ignore */ }
+    }, 280);
+  };
+
+  const handleMergeTouchMove = (e) => {
+    const ref = touchMergeDragRef.current;
+    if (ref.pointerId === null || e.pointerId !== ref.pointerId) return;
+
+    if (!ref.active) {
+      const dx = e.clientX - ref.startX;
+      const dy = e.clientY - ref.startY;
+      if (Math.hypot(dx, dy) > 10) {
+        if (ref.timer) { window.clearTimeout(ref.timer); ref.timer = null; }
+        ref.pointerId = null;
+        ref.fromIndex = null;
+      }
+      return;
+    }
+
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const card = el && el.closest ? el.closest('[data-merge-card-index]') : null;
+    if (card) {
+      const overIdx = parseInt(card.getAttribute('data-merge-card-index'), 10);
+      if (!isNaN(overIdx) && overIdx !== touchMergeOverIndex) {
+        setTouchMergeOverIndex(overIdx);
+      }
+    }
+  };
+
+  const handleMergeTouchEnd = (e) => {
+    const ref = touchMergeDragRef.current;
+    if (ref.pointerId === null || e.pointerId !== ref.pointerId) return;
+
+    if (ref.timer) { window.clearTimeout(ref.timer); ref.timer = null; }
+
+    const wasActive = ref.active;
+    const fromIdx = ref.fromIndex;
+    const toIdx = touchMergeOverIndex;
+
+    ref.active = false;
+    ref.fromIndex = null;
+    ref.pointerId = null;
+
+    setTouchMergeFromIndex(null);
+    setTouchMergeOverIndex(null);
+
+    if (wasActive && fromIdx != null && toIdx != null && fromIdx !== toIdx) {
+      const reordered = [...mergeCards];
+      const [moved] = reordered.splice(fromIdx, 1);
+      reordered.splice(toIdx, 0, moved);
+      setMergeCards(reordered);
+      setFiles(reordered.map((c) => c.file));
+    }
+  };
+
+  const handleMergeTouchCancel = () => {
+    const ref = touchMergeDragRef.current;
+    if (ref.timer) { window.clearTimeout(ref.timer); ref.timer = null; }
+    ref.active = false;
+    ref.fromIndex = null;
+    ref.pointerId = null;
+    setTouchMergeFromIndex(null);
+    setTouchMergeOverIndex(null);
   };
 
   const deleteMergeCard = (index) => {
@@ -3944,13 +4058,18 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
 
             {/* 11. Visual Merge PDF Studio */}
             {tool?.id === 'merge' && (
-              <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
+              <div className="bg-white border border-slate-200 rounded-3xl p-4 sm:p-8 shadow-sm space-y-4 sm:space-y-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100 text-xs">
                   <div>
                     <span className="font-bold text-slate-800 text-sm">
                       PDF Documents to Merge ({files.length})
                     </span>
-                    <p className="text-slate-400 mt-0.5">Drag & drop cards to reorder merge sequence. Output will follow left-to-right order.</p>
+                    <p className="text-slate-400 mt-0.5 hidden sm:block">
+                      Drag &amp; drop cards to reorder merge sequence. Output will follow left-to-right order.
+                    </p>
+                    <p className="text-slate-400 mt-0.5 sm:hidden">
+                      Press and hold a card to pick it up, then drag to reorder the merge sequence.
+                    </p>
                   </div>
 
                   <label htmlFor="studioAddMorePdfsInput" className="px-4 py-2 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold rounded-xl text-xs cursor-pointer flex items-center gap-1.5 transition self-start sm:self-auto">
@@ -3967,54 +4086,108 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                   </label>
                 </div>
 
+                {/* Touch-drag hint (mobile only) */}
+                {touchMergeFromIndex === null && mergeCards.length > 1 && (
+                  <div className="sm:hidden flex items-center gap-2 px-3 py-2 bg-rose-50 border border-rose-100 rounded-2xl text-[11px] text-rose-900">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse shrink-0" />
+                    <span>Long-press any card for a moment — it will lift, then drag to its new position.</span>
+                  </div>
+                )}
+
                 {isLoadingMergePreviews ? (
                   <div className="py-24 text-center text-slate-400 space-y-2">
                     <Loader2 className="w-8 h-8 animate-spin mx-auto text-rose-500" />
                     <p className="text-xs">Generating document previews...</p>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 max-h-[500px] overflow-y-auto pr-1">
-                    {mergeCards.map((card, idx) => (
-                      <div
-                        key={card.id}
-                        draggable
-                        onDragStart={(e) => handleMergeDragStart(e, idx)}
-                        onDragOver={handleMergeDragOver}
-                        onDrop={(e) => handleMergeDrop(e, idx)}
-                        className={`group relative rounded-2xl border-2 bg-slate-50 overflow-hidden cursor-grab active:cursor-grabbing p-2 shadow-xs transition ${
-                          draggedMergeIndex === idx ? 'opacity-40 scale-95 border-rose-400' : 'border-slate-200 hover:border-rose-400 hover:shadow-md'
-                        }`}
-                      >
-                        <div className="p-2 flex items-center justify-center min-h-[160px] bg-white rounded-xl border border-slate-100">
-                          {card.previewUrl ? (
-                            <img src={card.previewUrl} alt={card.file.name} className="max-h-36 object-contain shadow-xs" />
-                          ) : (
-                            <FileText className="w-12 h-12 text-slate-300" />
+                  <div
+                    ref={mergeGridRef}
+                    className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4 max-h-[500px] overflow-y-auto pr-1"
+                  >
+                    {mergeCards.map((card, idx) => {
+                      const isDesktopDragging = draggedMergeIndex === idx;
+                      const isTouchDragging = touchMergeFromIndex === idx;
+                      const isTouchOver =
+                        touchMergeFromIndex !== null &&
+                        touchMergeOverIndex === idx &&
+                        touchMergeFromIndex !== idx;
+                      const anyDragActive = touchMergeFromIndex !== null;
+
+                      return (
+                        <div
+                          key={card.id}
+                          data-merge-card-index={idx}
+                          draggable
+                          onDragStart={(e) => handleMergeDragStart(e, idx)}
+                          onDragOver={handleMergeDragOver}
+                          onDrop={(e) => handleMergeDrop(e, idx)}
+                          onPointerDown={(e) => handleMergeTouchStart(e, idx)}
+                          onPointerMove={handleMergeTouchMove}
+                          onPointerUp={handleMergeTouchEnd}
+                          onPointerCancel={handleMergeTouchCancel}
+                          onContextMenu={(e) => {
+                            if (touchMergeDragRef.current.active) e.preventDefault();
+                          }}
+                          style={{
+                            touchAction: anyDragActive ? 'none' : 'manipulation',
+                            WebkitTouchCallout: anyDragActive ? 'none' : 'default',
+                            WebkitUserSelect: anyDragActive ? 'none' : 'auto',
+                            userSelect: anyDragActive ? 'none' : 'auto',
+                          }}
+                          className={`group relative rounded-2xl border-2 bg-slate-50 overflow-hidden cursor-grab active:cursor-grabbing p-2 transition-all duration-200 ${
+                            isDesktopDragging || isTouchDragging
+                              ? 'opacity-40 scale-95 border-rose-400'
+                              : isTouchOver
+                              ? 'border-rose-500 ring-4 ring-rose-400/40 scale-105 bg-rose-50 shadow-lg z-10'
+                              : 'border-slate-200 hover:border-rose-400 hover:shadow-md'
+                          }`}
+                        >
+                          <div className="p-2 flex items-center justify-center min-h-[140px] sm:min-h-[160px] bg-white rounded-xl border border-slate-100">
+                            {card.previewUrl ? (
+                              <img
+                                src={card.previewUrl}
+                                alt={card.file.name}
+                                className="max-h-32 sm:max-h-36 object-contain shadow-xs pointer-events-none"
+                                draggable={false}
+                              />
+                            ) : (
+                              <FileText className="w-12 h-12 text-slate-300" />
+                            )}
+                          </div>
+
+                          <div className="absolute top-3 right-3 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition">
+                            <button
+                              type="button"
+                              onClick={() => deleteMergeCard(idx)}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              className="p-1.5 bg-white text-slate-600 hover:text-red-600 rounded-lg shadow cursor-pointer transition touch-manipulation"
+                              title="Remove from merge"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          <div className="px-2 py-1.5 bg-white border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold text-slate-600 mt-1 rounded-b-xl">
+                            <div className="flex items-center space-x-1 truncate max-w-[90px]">
+                              <GripVertical className="w-3 h-3 text-slate-400 shrink-0" />
+                              <span className="truncate">{card.file.name}</span>
+                            </div>
+                            <span className="text-[10px] text-rose-600 font-bold bg-rose-50 px-1.5 py-0.5 rounded">
+                              {idx + 1} ({card.pageCount}p)
+                            </span>
+                          </div>
+
+                          {/* "Moving…" pill during touch drag */}
+                          {isTouchDragging && (
+                            <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex justify-center pointer-events-none">
+                              <span className="px-2 py-0.5 bg-rose-500 text-white text-[9px] font-black uppercase tracking-wider rounded-full shadow pf-anim-slide-down">
+                                Moving…
+                              </span>
+                            </div>
                           )}
                         </div>
-
-                        <div className="absolute top-3 right-3 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition">
-                          <button
-                            type="button"
-                            onClick={() => deleteMergeCard(idx)}
-                            className="p-1.5 bg-white text-slate-600 hover:text-red-600 rounded-lg shadow cursor-pointer transition"
-                            title="Remove from merge"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-
-                        <div className="px-2 py-1.5 bg-white border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold text-slate-600 mt-1 rounded-b-xl">
-                          <div className="flex items-center space-x-1 truncate max-w-[90px]">
-                            <GripVertical className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span className="truncate">{card.file.name}</span>
-                          </div>
-                          <span className="text-[10px] text-rose-600 font-bold bg-rose-50 px-1.5 py-0.5 rounded">
-                            {idx + 1} ({card.pageCount}p)
-                          </span>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 
@@ -4027,7 +4200,7 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
                 <button
                   onClick={executeAction}
                   disabled={isProcessing || files.length < 2 || isLoadingMergePreviews}
-                  className="w-full py-4 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                  className="w-full py-4 text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center space-x-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed active:scale-[0.99]"
                 >
                   {isProcessing ? (
                     <div className="flex items-center space-x-2">
