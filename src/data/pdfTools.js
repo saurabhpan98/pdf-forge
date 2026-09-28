@@ -93,7 +93,7 @@ export const PDF_CATEGORIES = [
       { id: 'unlock', name: 'Unlock PDF', desc: 'Remove passwords and permissions security.', icon: Unlock, color: 'text-blue-600', bg: 'bg-blue-50' },
       { id: 'protect', name: 'Protect PDF', desc: 'Encrypt files with strong password protection.', icon: ShieldCheck, color: 'text-sky-600', bg: 'bg-sky-50' },
       { id: 'sign', name: 'Sign PDF', desc: 'Create digital signatures and sign agreements.', icon: PenTool, color: 'text-indigo-600', bg: 'bg-indigo-50' },
-      { id: 'redact', name: 'Redact PDF', desc: 'Permanently blackout sensitive information.', icon: EyeOff, color: 'text-slate-700', bg: 'bg-slate-50', inactive: true, badge: 'Coming Soon' },
+      { id: 'redact', name: 'Redact PDF', desc: 'Permanently blackout sensitive information.', icon: EyeOff, color: 'text-slate-700', bg: 'bg-slate-50' },
       { id: 'compare', name: 'Compare PDF', desc: 'Side-by-side visual and text diff comparison.', icon: GitCompare, color: 'text-cyan-600', bg: 'bg-cyan-50', inactive: true, badge: 'Coming Soon' },
     ],
   },

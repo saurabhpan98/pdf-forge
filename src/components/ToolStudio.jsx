@@ -96,6 +96,7 @@ import SignPdfStudio from './SignPdfStudio';
 import AISummarizerStudio from './AISummarizerStudio';
 import TranslatePdfStudio from './TranslatePdfStudio';
 import MetadataEditorStudio from './MetadataEditorStudio';
+import RedactPdfStudio from './RedactPdfStudio';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
   const [files, setFiles] = useState(initialFiles || []);
@@ -1473,6 +1474,17 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   if (tool?.id === 'metadata') {
     return (
       <MetadataEditorStudio
+        tool={tool}
+        file={files[0]}
+        onBack={onBack}
+      />
+    );
+  }
+
+  // --- Redact PDF ---
+  if (tool?.id === 'redact') {
+    return (
+      <RedactPdfStudio
         tool={tool}
         file={files[0]}
         onBack={onBack}

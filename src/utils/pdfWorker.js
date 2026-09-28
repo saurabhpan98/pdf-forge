@@ -2655,3 +2655,56 @@ export async function updatePdfMetadata(file, metadata) {
     compressedSize: pdfBytes.byteLength,
   };
 }
+
+/* =========================================================================
+ *  REDACT PDF
+ *
+ *  Sends redaction rectangles to the backend where PyMuPDF permanently
+ *  removes the underlying content — text glyphs, image pixels, and covered
+ *  vector graphics — then draws the fill rectangle in its place.
+ *
+ *  This is TRUE redaction: the removed content cannot be recovered by
+ *  text extraction, copy/paste, or hex inspection.
+ * ========================================================================= */
+export async function redactPdf(file, redactions, options = {}) {
+  const isLocked = await checkPdfPassword(file);
+  if (isLocked) {
+    const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
+    err.lockedFiles = [file.name];
+    throw err;
+  }
+  if (!redactions || redactions.length === 0) {
+    throw new Error('No redaction rectangles provided.');
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('payload', JSON.stringify({
+    options: {
+      fillColor: options.fillColor || [0, 0, 0],
+      scrubImages: options.scrubImages !== false,
+      scrubGraphics: options.scrubGraphics !== false,
+    },
+    redactions,
+  }));
+
+  //const response = await fetch(`${API_BASE_URL}/api/redact-pdf`, {
+  const response = await fetch('/api/redact-pdf', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Server failed to redact PDF.');
+  }
+
+  const pdfBlob = await response.blob();
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+  return {
+    blob: pdfBlob,
+    filename: `${baseName}_redacted.pdf`,
+    originalSize: file.size,
+    compressedSize: pdfBlob.size,
+  };
+}

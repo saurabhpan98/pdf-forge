@@ -1114,6 +1114,77 @@ app.post('/api/edit-pdf', upload.single('file'), async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------
+// Redact PDF — true content-stream removal via PyMuPDF
+// ---------------------------------------------------------
+app.post('/api/redact-pdf', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No PDF file uploaded.' });
+  }
+
+  const tempId = `redact_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = path.join(os.tmpdir(), tempId);
+  const inputPdfPath = path.join(tempDir, 'input.pdf');
+  const outputPdfPath = path.join(tempDir, 'output.pdf');
+  const payloadPath = path.join(tempDir, 'payload.json');
+  const pythonScriptPath = path.join(__dirname, 'convert_redact_pdf.py');
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(inputPdfPath, req.file.buffer);
+
+    let payload = { options: {}, redactions: [] };
+    try {
+      payload = JSON.parse(req.body.payload || '{}');
+    } catch {
+      return res.status(400).json({ error: 'Invalid redaction payload.' });
+    }
+
+    const redactions = Array.isArray(payload.redactions) ? payload.redactions : [];
+    if (redactions.length === 0) {
+      return res.status(400).json({ error: 'No redaction rectangles provided.' });
+    }
+
+    await fs.writeFile(payloadPath, JSON.stringify(payload), 'utf-8');
+
+    await new Promise((resolve, reject) => {
+      const py = spawn('python3', [
+        pythonScriptPath,
+        inputPdfPath,
+        outputPdfPath,
+        payloadPath,
+      ]);
+      let stderr = '';
+      py.stdout.on('data', (d) => process.stdout.write(`[py-redact] ${d}`));
+      py.stderr.on('data', (d) => {
+        const s = d.toString();
+        stderr += s;
+        process.stderr.write(`[py-redact] ${s}`);
+      });
+      py.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`redact_pdf failed (code ${code}): ${stderr.slice(0, 500)}`));
+      });
+      py.on('error', (err) => reject(err));
+    });
+
+    const pdfBuffer = await fs.readFile(outputPdfPath);
+    const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${originalName}_redacted.pdf"`);
+    res.setHeader('x-original-size', req.file.size.toString());
+    res.setHeader('x-redacted-size', pdfBuffer.length.toString());
+    return res.send(pdfBuffer);
+  } catch (error) {
+    console.error('PDF redaction error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to redact PDF.' });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Conversion server running on port ${PORT}`);
