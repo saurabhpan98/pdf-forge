@@ -98,6 +98,7 @@ import TranslatePdfStudio from './TranslatePdfStudio';
 import MetadataEditorStudio from './MetadataEditorStudio';
 import RedactPdfStudio from './RedactPdfStudio';
 import CompressPdfStudio from './CompressPdfStudio';
+import RepairPdfStudio from './RepairPdfStudio';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
   const [files, setFiles] = useState(initialFiles || []);
@@ -1732,6 +1733,17 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   if (tool?.id === 'compress') {
     return (
       <CompressPdfStudio
+        tool={tool}
+        file={files[0]}
+        onBack={onBack}
+      />
+    );
+  }
+
+  // --- Repair PDF ---
+  if (tool?.id === 'repair') {
+    return (
+      <RepairPdfStudio
         tool={tool}
         file={files[0]}
         onBack={onBack}

@@ -1287,6 +1287,90 @@ app.post('/api/redact-pdf', upload.single('file'), async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------
+// Repair PDF — multi-tier recovery via Ghostscript, PyMuPDF, pikepdf
+// ---------------------------------------------------------
+app.post('/api/repair-pdf', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No PDF file uploaded.' });
+  }
+
+  const tempId = `repair_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = path.join(os.tmpdir(), tempId);
+  const inputPdfPath = path.join(tempDir, 'input.pdf');
+  const outputPdfPath = path.join(tempDir, 'output.pdf');
+  const payloadPath = path.join(tempDir, 'payload.json');
+  const pythonScriptPath = path.join(__dirname, 'convert_repair_pdf.py');
+
+  const originalSize = req.file.buffer.length;
+  const originalPages = parseInt(req.body.originalPages || '0', 10) || 0;
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(inputPdfPath, req.file.buffer);
+    await fs.writeFile(payloadPath, JSON.stringify({ originalPages }), 'utf-8');
+
+    let stdout = '';
+    let stderr = '';
+
+    const exitCode = await new Promise((resolve) => {
+      const py = spawn('python3', [
+        pythonScriptPath,
+        inputPdfPath,
+        outputPdfPath,
+        payloadPath,
+      ]);
+      py.stdout.on('data', (d) => {
+        stdout += d.toString();
+        process.stdout.write(`[py-repair] ${d}`);
+      });
+      py.stderr.on('data', (d) => {
+        stderr += d.toString();
+        process.stderr.write(`[py-repair] ${d}`);
+      });
+      py.on('close', (code) => resolve(code));
+      py.on('error', () => resolve(-1));
+    });
+
+    // Parse the JSON result block emitted by the Python script
+    let report = null;
+    try {
+      const lines = stdout.trim().split('\n');
+      const last = lines[lines.length - 1];
+      report = JSON.parse(last);
+    } catch {
+      report = { success: false, engine: null, pages: 0, originalPages };
+    }
+
+    if (exitCode !== 0 || !report.success) {
+      return res.status(422).json({
+        error: 'Unable to repair this PDF. It may be too heavily corrupted, or the content data has been lost.',
+        isUnrepairable: true,
+        engine: report.engine,
+        originalPages: report.originalPages,
+      });
+    }
+
+    const repairedBuffer = await fs.readFile(outputPdfPath);
+    const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${originalName}_repaired.pdf"`);
+    res.setHeader('x-original-size', originalSize.toString());
+    res.setHeader('x-repaired-size', repairedBuffer.length.toString());
+    res.setHeader('x-repair-engine', report.engine || 'unknown');
+    res.setHeader('x-original-pages', String(report.originalPages || 0));
+    res.setHeader('x-repaired-pages', String(report.pages || 0));
+
+    return res.send(repairedBuffer);
+  } catch (error) {
+    console.error('PDF repair error:', error);
+    return res.status(500).json({ error: error.message || 'Failed to repair PDF.' });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {

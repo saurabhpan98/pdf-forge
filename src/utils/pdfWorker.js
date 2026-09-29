@@ -2741,3 +2741,68 @@ export async function redactPdf(file, redactions, options = {}) {
     compressedSize: pdfBlob.size,
   };
 }
+
+/* =========================================================================
+ *  REPAIR PDF
+ *
+ *  Sends the damaged PDF to the backend where three independent engines
+ *  attempt recovery in order: Ghostscript → PyMuPDF → pikepdf (QPDF).
+ *  The first engine that produces a readable PDF wins.
+ *
+ *  The response carries headers reporting which engine succeeded and how
+ *  many pages were recovered versus how many the file claimed to have.
+ * ========================================================================= */
+export async function repairPdf(file) {
+  // Repair must work on damaged files — we intentionally skip the
+  // password check because corrupted encryption markers can confuse it.
+  // The backend will report a clean error if the file is encrypted.
+
+  // First, do a best-effort page count using pdf.js on the client.
+  // If pdf.js can't open it, we send originalPages=0 and let the
+  // backend engines do their work.
+  let originalPages = 0;
+  try {
+    const buf = await file.arrayBuffer();
+    const doc = await pdfjsLib.getDocument({ data: buf.slice(0) }).promise;
+    originalPages = doc.numPages;
+    try { doc.destroy(); } catch { /* ignore */ }
+  } catch {
+    originalPages = 0;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('originalPages', String(originalPages));
+
+  const response = await fetch(`${API_BASE_URL}/api/repair-pdf`, {
+  //const response = await fetch('/api/repair-pdf', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const err = new Error(errorData.error || 'Server failed to repair PDF.');
+    if (errorData.isUnrepairable) err.isUnrepairable = true;
+    throw err;
+  }
+
+  const pdfBlob = await response.blob();
+  const originalSize = parseInt(response.headers.get('x-original-size') || '0', 10) || file.size;
+  const repairedSize = parseInt(response.headers.get('x-repaired-size') || '0', 10) || pdfBlob.size;
+  const engine = response.headers.get('x-repair-engine') || 'unknown';
+  const repairedPages = parseInt(response.headers.get('x-repaired-pages') || '0', 10) || 0;
+  const origPages = parseInt(response.headers.get('x-original-pages') || '0', 10) || originalPages;
+
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+  return {
+    blob: pdfBlob,
+    filename: `${baseName}_repaired.pdf`,
+    originalSize,
+    compressedSize: repairedSize,
+    engine,
+    repairedPages,
+    originalPages: origPages,
+    pagesLost: Math.max(0, origPages - repairedPages),
+  };
+}
