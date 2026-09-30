@@ -100,6 +100,7 @@ import RedactPdfStudio from './RedactPdfStudio';
 import CompressPdfStudio from './CompressPdfStudio';
 import RepairPdfStudio from './RepairPdfStudio';
 import WordToPdfStudio from './WordToPdfStudio';
+import PdfToWordStudio from './PdfToWordStudio';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
   const [files, setFiles] = useState(initialFiles || []);
@@ -1756,6 +1757,17 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   if (tool?.id === 'word-to-pdf') {
     return (
       <WordToPdfStudio
+        tool={tool}
+        file={files[0]}
+        onBack={onBack}
+      />
+    );
+  }
+
+  // --- PDF to Word ---
+  if (tool?.id === 'pdf-to-word') {
+    return (
+      <PdfToWordStudio
         tool={tool}
         file={files[0]}
         onBack={onBack}

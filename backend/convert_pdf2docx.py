@@ -1,195 +1,287 @@
+"""
+PDF → DOCX conversion engine.
+
+Primary engine: pdf2docx — performs computer-vision layout analysis to
+detect paragraphs, headings, tables, images, alignment, and multi-column
+structure. This is the same library that powers BentoPDF and many
+commercial converters.
+
+Fallback engine: the original block-based converter, preserved as
+convert_pdf2docx_legacy.py. Used only when pdf2docx fails to produce
+a usable DOCX.
+
+Every successful output is passed through enhance_docx_output.py for
+post-processing — explicit styles, cleaned trailing paragraphs, and
+explicit alignment on every paragraph.
+
+Emits a marker-prefixed JSON result on stdout:
+    __RESULT__{"success":true,"engine":"pdf2docx","enhanced":true,...}
+"""
 import sys
 import os
-import fitz  # PyMuPDF
-from docx import Document
-from docx.shared import Inches, Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
-from docx.oxml import OxmlElement, parse_xml
-from docx.oxml.ns import nsdecls, qn
+import json
+import subprocess
 
-def set_cell_borders(cell, top=True, bottom=True, left=True, right=True, color="CCCCCC", sz="4"):
-    tcPr = cell._tc.get_or_add_tcPr()
-    borders_elm = OxmlElement('w:tcBorders')
-    
-    for side, active in [('top', top), ('bottom', bottom), ('left', left), ('right', right)]:
-        edge = OxmlElement(f'w:{side}')
-        edge.set(qn('w:val'), 'single' if active else 'none')
-        edge.set(qn('w:sz'), sz)
-        edge.set(qn('w:space'), '0')
-        edge.set(qn('w:color'), color)
-        borders_elm.append(edge)
-        
-    tcPr.append(borders_elm)
+MARKER = '__RESULT__'
 
-def set_cell_margins(cell, top=80, bottom=80, left=120, right=120):
-    tcPr = cell._tc.get_or_add_tcPr()
-    tcMar = OxmlElement('w:tcMar')
-    for m, val in [('top', top), ('bottom', bottom), ('left', left), ('right', right)]:
-        node = OxmlElement(f'w:{m}')
-        node.set(qn('w:w'), str(val))
-        node.set(qn('w:type'), 'dxa')
-        tcMar.append(node)
-    tcPr.append(tcMar)
 
-def convert_pdf_to_exact_docx(pdf_path, docx_path):
-    doc = Document()
-    doc_pdf = fitz.open(pdf_path)
+def log(msg):
+    sys.stderr.write(f"[pdf2docx] {msg}\n")
 
-    for page_idx, page in enumerate(doc_pdf):
-        rect = page.rect
-        page_width_in = rect.width / 72.0
-        page_height_in = rect.height / 72.0
 
-        # Create or adjust section margins to match exact page dimensions
-        if page_idx == 0:
-            section = doc.sections[0]
+def _emit(payload):
+    sys.stdout.write(f"{MARKER}{json.dumps(payload)}\n")
+    sys.stdout.flush()
+
+
+# ---------------------------------------------------------------------------
+# Primary engine — pdf2docx
+# ---------------------------------------------------------------------------
+def _try_pdf2docx(input_path, output_path):
+    try:
+        from pdf2docx import Converter
+    except ImportError:
+        log("pdf2docx not installed")
+        return None
+
+    try:
+        if os.path.exists(output_path):
+            os.remove(output_path)
+    except Exception:
+        pass
+
+    try:
+        cv = Converter(input_path)
+        try:
+            # Default settings preserve layout best. Any tweaks here risk
+            # regressing quality on documents pdf2docx already handles.
+            cv.convert(output_path)
+        finally:
+            cv.close()
+    except Exception as e:
+        log(f"pdf2docx failed: {e}")
+        return None
+
+    if not os.path.exists(output_path):
+        log("pdf2docx produced no output file")
+        return None
+
+    size = os.path.getsize(output_path)
+    # An empty DOCX is roughly 1.5 KB. Anything smaller is a failure.
+    if size < 2000:
+        log(f"pdf2docx output too small ({size} bytes)")
+        return None
+
+    return {'sizeBytes': size}
+
+
+# ---------------------------------------------------------------------------
+# Fallback engine — legacy block-based converter
+# ---------------------------------------------------------------------------
+def _try_legacy(input_path, output_path):
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'convert_pdf2docx_legacy.py')
+    if not os.path.exists(script):
+        log("legacy fallback script not found")
+        return None
+
+    try:
+        if os.path.exists(output_path):
+            os.remove(output_path)
+    except Exception:
+        pass
+
+    try:
+        r = subprocess.run(
+            ['python3', script, input_path, output_path],
+            capture_output=True, timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        log("legacy engine timed out")
+        return None
+    except Exception as e:
+        log(f"legacy engine exception: {e}")
+        return None
+
+    if r.returncode != 0:
+        stderr = r.stderr.decode('utf-8', 'ignore')
+        log(f"legacy engine failed: {stderr[:200]}")
+        return None
+
+    if not os.path.exists(output_path):
+        return None
+
+    return {'sizeBytes': os.path.getsize(output_path)}
+
+
+# ---------------------------------------------------------------------------
+# Post-processing
+# ---------------------------------------------------------------------------
+def _enhance(output_path):
+    """
+    Post-processing pipeline, in order:
+      1. enhance_docx_output.py  — alignment, empty paragraphs, borders
+      2. ooxml_sanitizer.py      — ECMA-376 element ordering and constraints
+      3. LibreOffice round-trip  — final re-serialization through LO's
+                                    OOXML writer for guaranteed Word
+                                    compatibility without losing structure
+    """
+    import tempfile
+    import shutil
+
+    ok = True
+
+    # ---- Stage 1: high-level cleanup ----
+    script_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), 'enhance_docx_output.py'
+    )
+    if os.path.exists(script_path):
+        try:
+            r = subprocess.run(
+                ['python3', script_path, output_path],
+                capture_output=True, timeout=60,
+            )
+            if r.stderr:
+                for line in r.stderr.decode('utf-8', 'ignore').split('\n'):
+                    if line.strip():
+                        log(line.strip())
+        except Exception as e:
+            log(f"enhance stage failed: {e}")
+            ok = False
+
+    # ---- Stage 2: schema sanitization ----
+    script_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), 'ooxml_sanitizer.py'
+    )
+    if os.path.exists(script_path):
+        try:
+            r = subprocess.run(
+                ['python3', script_path, output_path],
+                capture_output=True, timeout=120,
+            )
+            if r.stderr:
+                for line in r.stderr.decode('utf-8', 'ignore').split('\n'):
+                    if line.strip():
+                        log(line.strip())
+        except Exception as e:
+            log(f"sanitizer stage failed: {e}")
+            ok = False
+
+    # ---- Stage 3: LibreOffice round-trip ----
+    # Ask LibreOffice to read the DOCX and write it back. Its OOXML writer
+    # produces Word-compliant XML in the correct schema order while
+    # preserving paragraphs, runs, tables, images, headers, footers, and
+    # section properties. This is the standard "make it Word-openable"
+    # step used by many production converters.
+    try:
+        temp_dir = tempfile.mkdtemp(prefix='lo_roundtrip_')
+        user_profile = os.path.join(temp_dir, 'profile')
+
+        # LibreOffice appends the original base name and changes the
+        # extension, so we point --outdir at a fresh directory and pick
+        # up the file that appears there.
+        base = os.path.splitext(os.path.basename(output_path))[0]
+
+        lo_args = [
+            f'-env:UserInstallation=file://{user_profile}',
+            '--headless',
+            '--invisible',
+            '--nodefault',
+            '--nofirststartwizard',
+            '--nolockcheck',
+            '--nologo',
+            '--norestore',
+            '--convert-to',
+            'docx:MS Word 2007 XML',
+            '--outdir',
+            temp_dir,
+            output_path,
+        ]
+
+        try:
+            r = subprocess.run(
+                ['soffice'] + lo_args,
+                capture_output=True,
+                timeout=120,
+            )
+            if r.stderr:
+                stderr = r.stderr.decode('utf-8', 'ignore')
+                # Suppress LibreOffice's routine warnings
+                for line in stderr.split('\n'):
+                    line = line.strip()
+                    if line and 'javaldx' not in line.lower():
+                        log(f"soffice: {line}")
+        except subprocess.TimeoutExpired:
+            log("LibreOffice round-trip timed out — using pre-round-trip file")
+        except Exception as e:
+            log(f"LibreOffice round-trip failed: {e}")
+
+        # Find the file LibreOffice wrote
+        converted = os.path.join(temp_dir, base + '.docx')
+        if os.path.exists(converted) and os.path.getsize(converted) > 2000:
+            os.replace(converted, output_path)
+            log(f"LibreOffice round-trip succeeded "
+                f"({os.path.getsize(output_path)} bytes)")
         else:
-            section = doc.add_section()
+            log("LibreOffice round-trip produced no usable file — "
+                "keeping pre-round-trip version")
 
-        section.page_width = Inches(page_width_in)
-        section.page_height = Inches(page_height_in)
-        section.left_margin = Inches(0.5)
-        section.right_margin = Inches(0.5)
-        section.top_margin = Inches(0.5)
-        section.bottom_margin = Inches(0.5)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    except Exception as e:
+        log(f"round-trip cleanup failed: {e}")
 
-        # Detect Tables on the Page via PyMuPDF TableFinder
-        tabs = page.find_tables()
-        table_rects = [tab.bbox for tab in tabs]
+    return ok
 
-        # Extract structured content blocks
-        text_page = page.get_text("dict", flags=fitz.TEXT_DEHYPHENATE)
-        blocks = text_page.get("blocks", [])
 
-        # Process each block according to vertical Y-coordinate
-        blocks = sorted(blocks, key=lambda b: (b.get("bbox", [0, 0, 0, 0])[1], b.get("bbox", [0, 0, 0, 0])[0]))
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
+def convert(input_path, output_path):
+    result = {
+        'success': False,
+        'engine': None,
+        'enhanced': False,
+        'sizeBytes': 0,
+    }
 
-        handled_table_indices = set()
+    log(f"Input: {os.path.getsize(input_path)} bytes")
 
-        for b in blocks:
-            bbox = b.get("bbox", (0, 0, 0, 0))
-            b_center_y = (bbox[1] + bbox[3]) / 2.0
+    # 1. Primary
+    primary = _try_pdf2docx(input_path, output_path)
+    if primary:
+        result['engine'] = 'pdf2docx'
+        result['sizeBytes'] = primary['sizeBytes']
+        log(f"pdf2docx success ({primary['sizeBytes']} bytes)")
+    else:
+        # 2. Fallback
+        log("falling back to legacy engine")
+        fallback = _try_legacy(input_path, output_path)
+        if not fallback:
+            log("both engines failed")
+            return result
+        result['engine'] = 'legacy'
+        result['sizeBytes'] = fallback['sizeBytes']
+        log(f"legacy success ({fallback['sizeBytes']} bytes)")
 
-            # 1. Check if block is part of a table
-            in_table_idx = None
-            for idx, tab in enumerate(tabs):
-                tb_box = tab.bbox
-                if tb_box[0] <= bbox[0] and tb_box[2] >= bbox[2] and tb_box[1] <= b_center_y <= tb_box[3]:
-                    in_table_idx = idx
-                    break
+    # 3. Enhance
+    result['enhanced'] = _enhance(output_path)
 
-            if in_table_idx is not None:
-                if in_table_idx not in handled_table_indices:
-                    handled_table_indices.add(in_table_idx)
-                    table_obj = tabs[in_table_idx]
-                    df = table_obj.extract()
+    result['success'] = True
+    return result
 
-                    if df and len(df) > 0:
-                        table = doc.add_table(rows=len(df), cols=len(df[0]))
-                        table.alignment = WD_TABLE_ALIGNMENT.CENTER
-                        table.autofit = True
-
-                        for r_idx, row_vals in enumerate(df):
-                            for c_idx, val in enumerate(row_vals):
-                                cell = table.cell(r_idx, c_idx)
-                                cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-                                set_cell_borders(cell, color="B0B0B0", sz="4")
-                                set_cell_margins(cell, top=60, bottom=60, left=100, right=100)
-
-                                p = cell.paragraphs[0]
-                                p.paragraph_format.space_before = Pt(0)
-                                p.paragraph_format.space_after = Pt(0)
-                                p.paragraph_format.line_spacing = 1.0
-
-                                if val:
-                                    run = p.add_run(str(val).strip())
-                                    run.font.name = "Calibri"
-                                    run.font.size = Pt(9.5)
-                                    if r_idx == 0:
-                                        run.font.bold = True
-
-                        doc.add_paragraph()
-                continue
-
-            # 2. Text Paragraph Reconstruction with Fonts, Sizes, Colors & Indents
-            if b.get("type") == 0:  # Text block
-                p = doc.add_paragraph()
-                
-                # Calculate Left Indentation from Page Margin
-                left_pt = max(0, bbox[0] - 36)  # 36pt = 0.5 in left margin
-                if left_pt > 15:
-                    p.paragraph_format.left_indent = Pt(min(left_pt, 250))
-
-                p.paragraph_format.space_before = Pt(0)
-                p.paragraph_format.space_after = Pt(2)
-                p.paragraph_format.line_spacing = 1.05
-
-                for line in b.get("lines", []):
-                    for span in line.get("spans", []):
-                        text = span.get("text", "")
-                        if not text:
-                            continue
-
-                        run = p.add_run(text)
-                        
-                        # Preserve exact font size
-                        size = span.get("size", 10.0)
-                        run.font.size = Pt(max(6.0, min(size, 48.0)))
-
-                        # Preserve font styling
-                        font_name = span.get("font", "").lower()
-                        if "bold" in font_name or "black" in font_name or "heavy" in font_name:
-                            run.font.bold = True
-                        if "italic" in font_name or "oblique" in font_name:
-                            run.font.italic = True
-
-                        # Normalize Font Family
-                        if "times" in font_name or "serif" in font_name:
-                            run.font.name = "Times New Roman"
-                        elif "arial" in font_name or "helvetica" in font_name:
-                            run.font.name = "Arial"
-                        elif "courier" in font_name or "mono" in font_name:
-                            run.font.name = "Courier New"
-                        else:
-                            run.font.name = "Calibri"
-
-                        # Preserve text color
-                        color_int = span.get("color", 0)
-                        r = (color_int >> 16) & 255
-                        g = (color_int >> 8) & 255
-                        b_val = color_int & 255
-                        run.font.color.rgb = RGBColor(r, g, b_val)
-
-            # 3. Image Block Handling
-            elif b.get("type") == 1:  # Image block
-                img_bytes = b.get("image")
-                if img_bytes:
-                    temp_img = os.path.join(os.path.dirname(docx_path), f"img_{page_idx}_{b.get('number', 0)}.png")
-                    with open(temp_img, "wb") as f:
-                        f.write(img_bytes)
-                    try:
-                        p = doc.add_paragraph()
-                        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                        img_width_in = (bbox[2] - bbox[0]) / 72.0
-                        p.add_run().add_picture(temp_img, width=Inches(min(img_width_in, 6.0)))
-                    finally:
-                        if os.path.exists(temp_img):
-                            os.remove(temp_img)
-
-    doc_pdf.close()
-    doc.save(docx_path)
-    return 0
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
+        sys.stderr.write("Usage: convert_pdf2docx.py <in.pdf> <out.docx>\n")
+        _emit({'success': False, 'error': 'no input path provided'})
         sys.exit(1)
-    
-    input_pdf = sys.argv[1]
-    output_docx = sys.argv[2]
-    
     try:
-        sys.exit(convert_pdf_to_exact_docx(input_pdf, output_docx))
-    except Exception as e:
-        sys.stderr.write(f"Conversion engine error: {str(e)}\n")
+        result = convert(sys.argv[1], sys.argv[2])
+        _emit(result)
+        sys.exit(0 if result['success'] else 1)
+    except Exception as exc:
+        log(f"FATAL: {exc}")
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        _emit({'success': False, 'error': str(exc)})
         sys.exit(1)

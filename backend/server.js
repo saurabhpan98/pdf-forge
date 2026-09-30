@@ -59,6 +59,9 @@ app.use(cors({
     'x-complexity-warnings',
     'x-complexity-flags',
     'x-high-fidelity',
+    'x-conversion-engine',
+    'x-conversion-enhanced',
+    'x-converted-size',
   ],
 }));
 
@@ -386,6 +389,49 @@ app.post('/api/convert/word-to-pdf', upload.single('file'), async (req, res) => 
     return res.status(500).json({
       error: error.message || 'Failed to convert document with LibreOffice.',
     });
+  }
+});
+
+// ---------------------------------------------------------
+// PDF analysis for the PDF-to-Word tool.
+// Runs the complexity detector without converting, so the studio can
+// show a content-aware accuracy badge before the user commits.
+// ---------------------------------------------------------
+app.post('/api/analyze/pdf-for-word', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded.' });
+  }
+
+  const tempId = `analyze_pdf_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = os.tmpdir();
+  const inputPath = path.join(tempDir, `${tempId}_${req.file.originalname}`);
+
+  try {
+    await fs.writeFile(inputPath, req.file.buffer);
+
+    const script = path.join(__dirname, 'detect_pdf_complexity.py');
+    const output = await new Promise((resolve) => {
+      const py = spawn('python3', [script, inputPath]);
+      let buf = '';
+      py.stdout.on('data', (d) => { buf += d.toString(); });
+      py.stderr.on('data', (d) => process.stderr.write(`[py-pdf-complexity] ${d}`));
+      py.on('close', () => resolve(buf));
+      py.on('error', () => resolve(''));
+    });
+
+    const line = output.split('\n').reverse().find((l) => l.startsWith('__RESULT__'));
+    let report = { accuracyTier: 'unknown', hasTextLayer: false, reasons: [] };
+    if (line) {
+      try { report = JSON.parse(line.slice('__RESULT__'.length)); }
+      catch (e) { console.warn('PDF complexity parse failed:', e.message); }
+    }
+
+    return res.json(report);
+  } catch (error) {
+    console.error('PDF analysis failed:', error);
+    return res.status(500).json({ error: 'Failed to analyze PDF.' });
+  } finally {
+    await fs.unlink(inputPath).catch(() => {});
   }
 });
 
@@ -926,30 +972,40 @@ app.post('/api/convert/pdf-to-word', upload.single('file'), async (req, res) => 
   const tempDir = path.join(os.tmpdir(), tempId);
   const inputPdfPath = path.join(tempDir, 'input.pdf');
   const outputDocxPath = path.join(tempDir, 'output.docx');
-  const pythonScriptPath = path.join(__dirname, 'convert_pdf2docx.py'); // Uses native __dirname
+  const pythonScriptPath = path.join(__dirname, 'convert_pdf2docx.py');
 
   try {
     await fs.mkdir(tempDir, { recursive: true });
     await fs.writeFile(inputPdfPath, req.file.buffer);
 
-    await new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+
+    const exitCode = await new Promise((resolve) => {
       const py = spawn('python3', [pythonScriptPath, inputPdfPath, outputDocxPath]);
-
-      let stderr = '';
-      py.stderr.on('data', (data) => {
-        stderr += data.toString();
+      py.stdout.on('data', (d) => { stdout += d.toString(); });
+      py.stderr.on('data', (d) => {
+        const s = d.toString();
+        stderr += s;
+        process.stderr.write(`[py-pdf2docx] ${s}`);
       });
-
-      py.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`pdf2docx failed with code ${code}: ${stderr}`));
-        }
-      });
-
-      py.on('error', (err) => reject(err));
+      py.on('close', (code) => resolve(code));
+      py.on('error', () => resolve(-1));
     });
+
+    // Parse the marker line
+    let report = { success: false, engine: null, enhanced: false, sizeBytes: 0 };
+    const line = stdout.split('\n').reverse().find((l) => l.startsWith('__RESULT__'));
+    if (line) {
+      try { report = JSON.parse(line.slice('__RESULT__'.length)); }
+      catch (e) { console.warn('PDF→DOCX result parse failed:', e.message); }
+    }
+
+    if (exitCode !== 0 || !report.success) {
+      return res.status(500).json({
+        error: 'Failed to convert this PDF to Word. Both the primary and fallback engines were unable to produce a valid DOCX.',
+      });
+    }
 
     const docxBuffer = await fs.readFile(outputDocxPath);
     const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
@@ -959,6 +1015,11 @@ app.post('/api/convert/pdf-to-word', upload.single('file'), async (req, res) => 
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     );
     res.setHeader('Content-Disposition', `attachment; filename="${originalName}.docx"`);
+    res.setHeader('x-original-size', req.file.size.toString());
+    res.setHeader('x-converted-size', docxBuffer.length.toString());
+    res.setHeader('x-conversion-engine', report.engine || 'unknown');
+    res.setHeader('x-conversion-enhanced', report.enhanced ? '1' : '0');
+
     return res.send(docxBuffer);
   } catch (error) {
     console.error('PDF to DOCX conversion error:', error);

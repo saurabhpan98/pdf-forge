@@ -1014,6 +1014,7 @@ export async function convertPdfToWord(file) {
   formData.append('file', file);
 
   const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-word`, {
+  //const response = await fetch('/api/convert/pdf-to-word', {
     method: 'POST',
     body: formData,
   });
@@ -1026,11 +1027,18 @@ export async function convertPdfToWord(file) {
   const docxBlob = await response.blob();
   const baseName = file.name.replace(/\.[^/.]+$/, '');
 
+  const engine = response.headers.get('x-conversion-engine') || 'unknown';
+  const enhanced = response.headers.get('x-conversion-enhanced') === '1';
+  const originalSize = parseInt(response.headers.get('x-original-size') || '0', 10) || file.size;
+  const convertedSize = parseInt(response.headers.get('x-converted-size') || '0', 10) || docxBlob.size;
+
   return {
     blob: docxBlob,
     filename: `${baseName}.docx`,
-    originalSize: file.size,
-    compressedSize: docxBlob.size,
+    originalSize,
+    compressedSize: convertedSize,
+    engine,
+    enhanced,
   };
 }
 
@@ -2853,6 +2861,31 @@ export async function analyzeDocx(file) {
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     throw new Error(errorData.error || 'Failed to analyze document.');
+  }
+
+  return await response.json();
+}
+
+/* =========================================================================
+ *  ANALYZE PDF FOR WORD
+ *
+ *  Runs the PDF complexity detector on the backend without converting.
+ *  Returns a report the studio uses to show a content-aware accuracy
+ *  badge before the user commits to conversion.
+ * ========================================================================= */
+export async function analyzePdfForWord(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  //const response = await fetch(`${API_BASE_URL}/api/analyze/pdf-for-word`, {
+  const response = await fetch('/api/analyze/pdf-for-word', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Failed to analyze PDF.');
   }
 
   return await response.json();
