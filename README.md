@@ -24,12 +24,12 @@
 
 ### Convert to PDF 
 * **Compress PDF** : Two compression algorithms with a monotonic guarantee (never returns a larger file). **Smart Compress** keeps text selectable while recompressing images, subsetting fonts, and stripping metadata via Ghostscript. **Deep Compress** rasterizes pages to JPEG at a target DPI via PyMuPDF for maximum savings on scans and photo-heavy documents. Four presets (Light / Balanced / Aggressive / Extreme), plus a custom panel with DPI (50–300), JPEG quality (10–95), grayscale conversion, and per-feature toggles. Live size estimate updates as you adjust settings.
-* **Repair PDF** : (Coming Soon) Recover damaged and corrupted PDFs.
+* **Repair PDF** : Multi-tier recovery for damaged, truncated, or corrupt PDFs. Three independent engines run in sequence — Ghostscript `pdfwrite` (rebuilds structure with maximum fidelity), PyMuPDF (loose parser that auto-repairs on open), and pikepdf / QPDF (reconstructs the object table). The first engine that produces a readable PDF wins. Reports which engine succeeded, how many pages were recovered versus the original count, and warns if any content was permanently lost. Includes a pre-flight health diagnostic that tells the user if the file is already readable before repair is attempted.
 * **OCR Pages** : Make scanned documents searchable using in-browser Tesseract WASM. Supports English, Hindi, Spanish, French, and German. Two output modes: searchable PDF (invisible text layer) or plain .txt. Configurable DPI presets (192/288/384), character whitelists, and binarization.
 
 ### Optimize PDF 
 * **JPG to PDF** : Conversion of Images to PDF with additional configuration applied on image while conversion
-* **Word to PDF** : Direct conversion of Word (`.docx`, `.doc`) to PDF 
+* **Word to PDF** : Direct `.docx` / `.doc` conversion via headless LibreOffice, augmented by a DOCX preprocessor that normalizes spacing and strips trailing empties so Word's page count matches LibreOffice's output. Runs a pre-conversion font audit against the full installed font set (Liberation, Carlito, Caladea, DejaVu, Noto, Noto CJK, Indic scripts, Arabic, Thai) and reports any font that will be substituted. Detects native charts, SmartArt, embedded OLE objects, and drawing canvases up front, and offers a **High-fidelity mode** that rasterizes each page at 200 DPI so complex graphics render exactly as LibreOffice produced them. Post-conversion integrity check verifies the output has pages and extractable text. 
 * **PowerPoint to PDF** : Direct conversion of PowerPoint (`.pptx`, `.ppt`) to PDF
 * **Excel to PDF** : Direct conversion of Excel (`.xlsx`, `.xls`)
 * **HTML to PDF** : Direct conversion of HTML (`.html`) files to PDF
@@ -59,11 +59,9 @@
 * **Compare PDF** : (Coming Soon)
 
 ### PDF Intelligence
-| Tool | Description |
-|---|---|
-| **AI Summarizer** | On-device summarization using Transformers.js. Three depth modes (Quick / Standard / Deep) with map-reduce chunking for long documents. Runs entirely in your browser — files never leave your device. |
-| **Translate PDF** | Translate documents into 14+ languages using NLLB-200 or Opus-MT models. Paragraph-aware translation preserves structure. Also runs entirely client-side. |
-| **PDF to Markdown** | Convert structured PDFs into clean GitHub-Flavored Markdown with table and heading preservation. |
+* **AI Summarizer** : On-device summarization using Transformers.js. Three depth modes (Quick / Standard / Deep) with map-reduce chunking for long documents. Runs entirely in your browser — files never leave your device. 
+* **Translate PDF** : Translate documents into 14+ languages using NLLB-200 or Opus-MT models. Paragraph-aware translation preserves structure. Also runs entirely client-side. |
+* **PDF to Markdown** : Convert structured PDFs into clean GitHub-Flavored Markdown with table and heading preservation. 
 
 **AI tools run fully in-browser** via WebAssembly and (where available) WebGPU. No API keys, no server round-trip, no rate limits. Models download once and are cached locally — you can clear them any time from the storage icon in each AI tool's header.
 
@@ -91,7 +89,7 @@
 ### Engines & Parsers
 * **Python 3.10+:** PyMuPDF, python-docx, pdfplumber, openpyxl, pikepdf
 * **System binaries:** LibreOffice (headless), Ghostscript, qpdf, Poppler-utils
-* **Fonts:** Liberation, DejaVu, Noto, Carlito, Caladea
+* **Fonts:** Liberation, Liberation Narrow, Carlito, Caladea, DejaVu, Noto (core, extra, UI, mono, color emoji), Noto CJK (SC / TC / JP / KR), Noto Indic (Devanagari, Bengali, Gujarati, Gurmukhi, Kannada, Malayalam, Oriya, Tamil, Telugu), Noto Arabic and Naskh, Noto Hebrew, Noto Thai, Noto Khmer, Noto Lao, Noto Sinhala, Noto Myanmar, Lohit and Samyak Indic families, SMC Malayalam family, Kacst and Amiri Arabic, SIL (Andika, Charis, Gentium, Scheherazade, Abyssinica, Padauk), Takao, Nanum, WQY, URW base 35, Symbola, and FiraCode
 
 > ⚠️ LibreOffice is required on Render because ```libreoffice-convert``` wraps the system CLI (```libreoffice --headless```). Without the binary, Office conversions will fail with ```spawn libreoffice ENOENT```.
 
@@ -109,14 +107,21 @@
 
 ```text
 ├── backend/
-│   ├── convert_edit_pdf.py         # In-place PDF text editing (PyMuPDF background restoration)
-│   ├── convert_redact_pdf.py       # True content-stream redaction (text, images, vector graphics)
+├── backend/
+│   ├── audit_docx_fonts.py         # Pre-flight font audit for Word → PDF
 │   ├── convert_compress_pdf.py     # Deep Compress engine (PyMuPDF page rasterization)
-│   ├── pdf_inplace_editor.py       # Content-stream Tj/TJ rewriter for span edits
+│   ├── convert_edit_pdf.py         # In-place PDF text editing (PyMuPDF background restoration)
 │   ├── convert_pdf2docx.py         # PDF → DOCX reconstruction engine
 │   ├── convert_pdf2excel.py        # PDF → XLSX table extraction engine
 │   ├── convert_pdf2md.py           # PDF → Markdown converter (GFM tables + headings)
-│   ├── Dockerfile                  # Container image with Node + Python + LibreOffice + GS
+│   ├── convert_redact_pdf.py       # True content-stream redaction (text, images, vector graphics)
+│   ├── convert_repair_pdf.py       # Multi-tier PDF recovery (Ghostscript → PyMuPDF → pikepdf)
+│   ├── detect_docx_complexity.py   # Chart / SmartArt / OLE / drawing-canvas detector
+│   ├── pdf_inplace_editor.py       # Content-stream Tj/TJ rewriter for span edits
+│   ├── preprocess_docx.py          # DOCX normalization for page-count fidelity
+│   ├── rasterize_pdf.py            # Page rasterization engine (High-fidelity mode)
+│   ├── validate_converted_pdf.py   # Post-conversion integrity check
+│   ├── Dockerfile                  # Container image with Node + Python + LibreOffice + GS + full font set
 │   ├── package.json                # Backend Node dependencies
 │   └── server.js                   # Express API + conversion pipeline
 ├── src/
@@ -137,12 +142,14 @@
 │   │   ├── PdfiumTextEditOverlay.jsx
 │   │   ├── PrivacySection.jsx      # Dark privacy + security pillars
 │   │   ├── RedactPdfStudio.jsx     # True PDF redaction editor (marquee + PyMuPDF backend)
+│   │   ├── RepairPdfStudio.jsx     # Multi-tier PDF recovery UI with health diagnostics
 │   │   ├── Reviews.jsx             # Testimonial carousel
 │   │   ├── SignPdfStudio.jsx       # Signature placement editor
 │   │   ├── TextFormatSidebar.jsx   # Font / color / spacing / alignment controls
 │   │   ├── ToolCard.jsx            # Interactive tool card with hover animations
 │   │   ├── ToolModal.jsx           # Upload & security-verification modal
-│   │   └── ToolStudio.jsx          # Full-screen workspace for all 25+ tools
+│   │   ├── ToolStudio.jsx          # Full-screen workspace for all 25+ tools
+│   │   └── WordToPdfStudio.jsx     # DOCX → PDF studio with font audit + HD mode
 |   ├── data/
 |   │   └── pdfTools.jsx         # all pdf tools entry
 │   ├── hooks/
@@ -389,7 +396,13 @@ Our implementation calls PyMuPDF's `add_redact_annot()` and `apply_redactions()`
 
 To verify: run `pdftotext` on the output and search for the redacted content. It will return nothing. Files are processed in-memory on the server and discarded the moment the download finishes — same ephemeral model as every other server-side tool.
 
-### Troubleshooting
+### Additional guarantees
+* **No database.** There is nothing persistent to leak.
+* **No analytics.** No fingerprinting, no ads, no third-party tracking.
+* **Password-aware.** Encrypted PDFs and locked Office files are detected up-front; the app refuses to process them unless you explicitly provide the password to the Unlock tool.
+* **Auditable source.** Every line of code is on GitHub. Verify our claims, self-host it, or fork it.
+
+## Troubleshooting
 
 1. **Redaction appears to leave a visible "shadow" of the text**
 
@@ -399,12 +412,18 @@ The output is correct — the underlying content is gone, but a PDF reader may s
 
 This is intentional, not a bug. The compression endpoint enforces a **monotonic guarantee**: if the recompressed output would be larger than the input, the original bytes are returned untouched. This most often happens with PDFs that are already optimized (e.g. ones that have been through this tool before, or were generated by Acrobat's own "Reduce File Size"). Try a higher compression level (Aggressive or Extreme), switch to Deep Compress, or enable grayscale.
 
+3. **Word to PDF: charts, SmartArt, or embedded Excel objects look different**
 
-### Additional guarantees
-* **No database.** There is nothing persistent to leak.
-* **No analytics.** No fingerprinting, no ads, no third-party tracking.
-* **Password-aware.** Encrypted PDFs and locked Office files are detected up-front; the app refuses to process them unless you explicitly provide the password to the Unlock tool.
-* **Auditable source.** Every line of code is on GitHub. Verify our claims, self-host it, or fork it.
+Expected behavior, not a bug. LibreOffice's OOXML import filter renders charts, SmartArt, and embedded OLE objects with reduced fidelity compared to Word. Custom colors, gradient fills, 3D effects, and embedded data tables typically change appearance; SmartArt may fall back to a cached image or a simplified shape. No free converter achieves pixel-perfect fidelity on these elements — even commercial tools fall back to rasterization. The tool offers a **High-fidelity mode** that rasterizes each page at 200 DPI after LibreOffice renders it, so the output is at least consistent with what LibreOffice produced. Text is no longer selectable in that mode.
+
+4. **Word to PDF: page count differs from Word's status bar**
+
+Word hides trailing empty paragraphs when it computes the page count in the status bar; LibreOffice renders them. A new preprocessor normalizes this by removing trailing empties and making inherited paragraph spacing explicit before conversion. If a discrepancy still appears on a specific document, the cause is almost always a floating text box or drawing canvas whose height LibreOffice measures differently from Word. Try enabling High-fidelity mode — it does not change layout, but it will show you exactly what LibreOffice produced.
+
+5. **Word to PDF: font substitution warning**
+
+The server installs a broad font set (Liberation, Carlito, Caladea, Noto, DejaVu, plus Noto CJK and Noto Indic families) and maps common proprietary fonts to metric-compatible clones: Arial → Liberation Sans, Calibri and Aptos → Carlito, Cambria → Caladea, Times New Roman → Liberation Serif. Fonts with no good substitute (Wingdings, Comic Sans, some corporate typefaces) will still trigger the warning. For those, export directly from Word if exact fidelity matters.
+
 
 ## 🗺 Roadmap
 * Repair PDF (recover corrupted files)
