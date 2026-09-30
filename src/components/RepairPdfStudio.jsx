@@ -603,7 +603,7 @@ export default function RepairPdfStudio({ tool, file, onBack }) {
             <div className={`w-8 h-8 rounded-lg ${tool.bg} ${tool.color} flex items-center justify-center shrink-0`}>
               {tool && <tool.icon className="w-4 h-4" />}
             </div>
-            <div className="hidden sm:block min-w-0">
+            <div className="sm:block min-w-0">
               <h2 className="text-sm font-bold text-slate-900 leading-none">Repair PDF</h2>
               <p className="text-[10px] text-slate-500 mt-0.5 truncate max-w-[240px]">
                 {activeFile?.name}
@@ -621,7 +621,7 @@ export default function RepairPdfStudio({ tool, file, onBack }) {
               {isRepairing ? (
                 <><Loader2 className="w-3.5 h-3.5 animate-spin" /><span className="hidden sm:inline">Repairing…</span></>
               ) : (
-                <><Wrench className="w-3.5 h-3.5" /><span className="hidden sm:inline">Repair PDF</span></>
+                <><Wrench className="w-3.5 h-3.5" /><span className="sm:inline">Repair PDF</span></>
               )}
             </button>
           </div>
@@ -654,7 +654,7 @@ export default function RepairPdfStudio({ tool, file, onBack }) {
               className="text-[10px] font-bold text-green-700 hover:text-green-800 px-2.5 py-1.5 rounded-lg hover:bg-green-50 transition flex items-center gap-1 shrink-0 disabled:opacity-50 cursor-pointer"
             >
               <RefreshCw className="w-3 h-3" />
-              <span>Change</span>
+              <span>Change file</span>
             </button>
           </div>
 

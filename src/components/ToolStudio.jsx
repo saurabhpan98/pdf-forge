@@ -99,6 +99,7 @@ import MetadataEditorStudio from './MetadataEditorStudio';
 import RedactPdfStudio from './RedactPdfStudio';
 import CompressPdfStudio from './CompressPdfStudio';
 import RepairPdfStudio from './RepairPdfStudio';
+import WordToPdfStudio from './WordToPdfStudio';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
   const [files, setFiles] = useState(initialFiles || []);
@@ -1744,6 +1745,17 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   if (tool?.id === 'repair') {
     return (
       <RepairPdfStudio
+        tool={tool}
+        file={files[0]}
+        onBack={onBack}
+      />
+    );
+  }
+
+  // --- Word to PDF ---
+  if (tool?.id === 'word-to-pdf') {
+    return (
+      <WordToPdfStudio
         tool={tool}
         file={files[0]}
         onBack={onBack}

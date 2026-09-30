@@ -16,27 +16,148 @@ const upload = multer({ storage: multer.memoryStorage() });
 //app.use(cors());
 
 //cors for production 
-app.use(cors({
+/*app.use(cors({
   origin: '*', // Or specify: ['https://your-app.vercel.app', 'https://<username>.github.io']
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type'],
   exposedHeaders: ['x-original-size', 'x-compressed-size', 'Content-Disposition']
+}));*/
+
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+  exposedHeaders: [
+    'Content-Disposition',
+    'Content-Length',
+
+    // Compress / Crop / Edit / Word-to-PDF size headers
+    'x-original-size',
+    'x-compressed-size',
+    'x-edited-size',
+    'x-converted-size',
+    'x-pdfa-size',
+
+    // Redact
+    'x-redacted-size',
+
+    // Repair
+    'x-repaired-size',
+    'x-repair-engine',
+    'x-original-pages',
+    'x-repaired-pages',
+
+    // Word to PDF — audit + integrity
+    'x-page-count',
+    'x-text-extractable',
+    'x-missing-fonts',
+    'x-used-fonts',
+
+    // Compress algorithm info
+    'x-algorithm',
+    'x-was-compressed',
+    'x-complexity-warnings',
+    'x-complexity-flags',
+    'x-high-fidelity',
+  ],
 }));
 
 app.use(express.json());
 
-// Universal 1:1 Word to PDF conversion engine for arbitrary document layouts
-async function convertDocxToPdf(fileBuffer, originalFilename) {
+// Universal 1:1 Word to PDF conversion engine for arbitrary document layouts.
+// Returns:
+//   { buffer, audit, integrity, complexity, highFidelity }
+//   • audit       — font audit (from before conversion)
+//   • integrity   — post-conversion validation
+//   • complexity  — chart / diagram / OLE detection
+//   • highFidelity — true if the output was rasterized
+async function convertDocxToPdf(fileBuffer, originalFilename, options = {}) {
+  const highFidelity = Boolean(options.highFidelity);
   const tempId = `docx_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   const tempDir = os.tmpdir();
   const inputPath = path.join(tempDir, `${tempId}_${originalFilename}`);
   const rawPdfPath = path.join(tempDir, `${tempId}_raw.pdf`);
   const finalPdfPath = path.join(tempDir, `${tempId}_final.pdf`);
+  const rasterizedPath = path.join(tempDir, `${tempId}_rasterized.pdf`);
   const userProfileDir = path.join(tempDir, `lo_profile_${tempId}`);
 
   await fs.writeFile(inputPath, fileBuffer);
 
-  // 1. Convert via LibreOffice using native layout fidelity settings
+  // ---------------------------------------------------------------
+  // 0a. PRE-CONVERSION — Normalize DOCX for LibreOffice
+  // ---------------------------------------------------------------
+  const preprocessedPath = path.join(tempDir, `${tempId}_preprocessed.docx`);
+  let usePreprocessed = false;
+  try {
+    if (originalFilename.toLowerCase().endsWith('.docx')) {
+      const preprocessScript = path.join(__dirname, 'preprocess_docx.py');
+      const preprocessed = await new Promise((resolve) => {
+        const py = spawn('python3', [preprocessScript, inputPath, preprocessedPath]);
+        py.stderr.on('data', (d) => process.stderr.write(`[py-preprocess] ${d}`));
+        py.on('close', (code) => resolve(code === 0));
+        py.on('error', () => resolve(false));
+      });
+      if (preprocessed && (await fs.stat(preprocessedPath).catch(() => null))) {
+        usePreprocessed = true;
+      }
+    }
+  } catch (e) {
+    console.warn('DOCX preprocessing failed, using original:', e.message);
+  }
+
+  const conversionInputPath = usePreprocessed ? preprocessedPath : inputPath;
+
+  // ---------------------------------------------------------------
+  // 0b. PRE-CONVERSION — Font audit
+  // ---------------------------------------------------------------
+  let fontAudit = { fonts: [], missing: [], available: [] };
+  try {
+    const auditScript = path.join(__dirname, 'audit_docx_fonts.py');
+    const auditOutput = await new Promise((resolve) => {
+      const py = spawn('python3', [auditScript, conversionInputPath]);
+      let out = '';
+      py.stdout.on('data', (d) => { out += d.toString(); });
+      py.stderr.on('data', (d) => process.stderr.write(`[py-audit] ${d}`));
+      py.on('close', () => resolve(out));
+      py.on('error', () => resolve(''));
+    });
+    const line = auditOutput.split('\n').reverse().find((l) => l.startsWith('__RESULT__'));
+    if (line) {
+      try { fontAudit = JSON.parse(line.slice('__RESULT__'.length)); }
+      catch (e) { console.warn('Font audit JSON parse failed:', e.message); }
+    }
+  } catch (e) {
+    console.warn('Font audit step failed:', e.message);
+  }
+
+  // ---------------------------------------------------------------
+  // 0c. PRE-CONVERSION — Complexity detection
+  // ---------------------------------------------------------------
+  let complexity = { hasCharts: false, hasDiagrams: false, hasOleObjects: false, hasDrawingCanvas: false, warnings: [] };
+  try {
+    if (originalFilename.toLowerCase().endsWith('.docx')) {
+      const detectScript = path.join(__dirname, 'detect_docx_complexity.py');
+      const detectOutput = await new Promise((resolve) => {
+        const py = spawn('python3', [detectScript, conversionInputPath]);
+        let out = '';
+        py.stdout.on('data', (d) => { out += d.toString(); });
+        py.stderr.on('data', (d) => process.stderr.write(`[py-complexity] ${d}`));
+        py.on('close', () => resolve(out));
+        py.on('error', () => resolve(''));
+      });
+      const line = detectOutput.split('\n').reverse().find((l) => l.startsWith('__RESULT__'));
+      if (line) {
+        try { complexity = JSON.parse(line.slice('__RESULT__'.length)); }
+        catch (e) { console.warn('Complexity JSON parse failed:', e.message); }
+      }
+    }
+  } catch (e) {
+    console.warn('Complexity detection failed:', e.message);
+  }
+
+  // ---------------------------------------------------------------
+  // 1. Convert via LibreOffice with isolated profile
+  // ---------------------------------------------------------------
   const loArgs = [
     `-env:UserInstallation=file://${userProfileDir}`,
     '--headless',
@@ -50,7 +171,7 @@ async function convertDocxToPdf(fileBuffer, originalFilename) {
     'pdf:writer_pdf_Export:{"SelectPdfVersion":{"type":"long","value":"1"},"UseTaggedPDF":{"type":"boolean","value":"true"},"ExportNotes":{"type":"boolean","value":"false"}}',
     '--outdir',
     tempDir,
-    inputPath,
+    conversionInputPath,
   ];
 
   await new Promise((resolve) => {
@@ -59,16 +180,17 @@ async function convertDocxToPdf(fileBuffer, originalFilename) {
     lo.on('error', () => resolve());
   });
 
-  const generatedPdfName = path.basename(inputPath, path.extname(inputPath)) + '.pdf';
+  const generatedPdfName = path.basename(conversionInputPath, path.extname(conversionInputPath)) + '.pdf';
   const generatedPdfPath = path.join(tempDir, generatedPdfName);
 
-  // Fallback if direct soffice fails
   if (!(await fs.stat(generatedPdfPath).catch(() => null))) {
     const fallbackBuffer = await libreConvert(fileBuffer, '.pdf', undefined);
     await fs.writeFile(generatedPdfPath, fallbackBuffer);
   }
 
-  // 2. Universal Post-Processor: Reconcile DOCX intended pages vs generated PDF pages
+  // ---------------------------------------------------------------
+  // 2. Reconciliation (page count)
+  // ---------------------------------------------------------------
   const pyReconcile = `
 import sys
 import os
@@ -81,10 +203,8 @@ pdf_out = sys.argv[3]
 
 try:
     expected_pages = 0
-    # Determine Word document target pagination from XML metadata & break markers
     if docx_file.lower().endswith('.docx'):
         doc = docx.Document(docx_file)
-        # Check core properties (if Word cached the page count)
         try:
             core_props = doc.core_properties
             if hasattr(core_props, 'pages') and core_props.pages:
@@ -92,7 +212,6 @@ try:
         except Exception:
             expected_pages = 0
 
-        # Count explicit hard page breaks and section breaks
         explicit_breaks = 1
         for p in doc.paragraphs:
             for r in p.runs:
@@ -108,18 +227,15 @@ try:
 
         expected_pages = max(expected_pages, explicit_breaks)
 
-    # Inspect rendered PDF
     pdf_doc = fitz.open(pdf_in)
     actual_pages = len(pdf_doc)
 
-    # If an extra blank/trailing overflow page was created at the very end with no real content
     if expected_pages > 0 and actual_pages > expected_pages:
         last_page = pdf_doc[-1]
         text_content = last_page.get_text().strip()
         drawings = last_page.get_drawings()
         images = last_page.get_images()
 
-        # If last page contains only trailing whitespace, margins, or zero meaningful drawings
         if not text_content and len(drawings) == 0 and len(images) == 0:
             pdf_doc.delete_page(actual_pages - 1)
 
@@ -134,7 +250,7 @@ except Exception:
 
   try {
     await new Promise((resolve) => {
-      const py = spawn('python3', ['-c', pyReconcile, inputPath, generatedPdfPath, finalPdfPath]);
+      const py = spawn('python3', ['-c', pyReconcile, conversionInputPath, generatedPdfPath, finalPdfPath]);
       py.on('close', () => resolve());
       py.on('error', () => resolve());
     });
@@ -142,16 +258,74 @@ except Exception:
     // Proceed with generated PDF if post-processor has issues
   }
 
-  const outputTarget = (await fs.stat(finalPdfPath).catch(() => null)) ? finalPdfPath : generatedPdfPath;
+  let outputTarget = (await fs.stat(finalPdfPath).catch(() => null))
+    ? finalPdfPath
+    : generatedPdfPath;
+
+  // ---------------------------------------------------------------
+  // 3. HIGH-FIDELITY MODE — rasterize the PDF
+  // ---------------------------------------------------------------
+  let usedHighFidelity = false;
+  if (highFidelity) {
+    try {
+      const rasterizeScript = path.join(__dirname, 'rasterize_pdf.py');
+      const ok = await new Promise((resolve) => {
+        const py = spawn('python3', [rasterizeScript, outputTarget, rasterizedPath, '200', '88']);
+        py.stderr.on('data', (d) => process.stderr.write(`[py-rasterize] ${d}`));
+        py.on('close', (code) => resolve(code === 0));
+        py.on('error', () => resolve(false));
+      });
+      if (ok && (await fs.stat(rasterizedPath).catch(() => null))) {
+        outputTarget = rasterizedPath;
+        usedHighFidelity = true;
+      }
+    } catch (e) {
+      console.warn('Rasterization failed, using vector output:', e.message);
+    }
+  }
+
   const pdfBuffer = await fs.readFile(outputTarget);
 
-  // Cleanup
+  // ---------------------------------------------------------------
+  // 4. POST-CONVERSION — Integrity check
+  // ---------------------------------------------------------------
+  let integrity = { valid: true, pageCount: 0, textExtractable: false };
+  try {
+    const validateScript = path.join(__dirname, 'validate_converted_pdf.py');
+    const validateOutput = await new Promise((resolve) => {
+      const py = spawn('python3', [validateScript, outputTarget]);
+      let out = '';
+      py.stdout.on('data', (d) => { out += d.toString(); });
+      py.stderr.on('data', (d) => process.stderr.write(`[py-validate] ${d}`));
+      py.on('close', () => resolve(out));
+      py.on('error', () => resolve(''));
+    });
+    const line = validateOutput.split('\n').reverse().find((l) => l.startsWith('__RESULT__'));
+    if (line) {
+      try { integrity = JSON.parse(line.slice('__RESULT__'.length)); }
+      catch (e) { console.warn('Validation JSON parse failed:', e.message); }
+    }
+  } catch (e) {
+    console.warn('Validation step failed:', e.message);
+  }
+
+  // ---------------------------------------------------------------
+  // 5. Cleanup
+  // ---------------------------------------------------------------
   await fs.unlink(inputPath).catch(() => {});
+  if (usePreprocessed) await fs.unlink(preprocessedPath).catch(() => {});
   await fs.unlink(generatedPdfPath).catch(() => {});
   await fs.unlink(finalPdfPath).catch(() => {});
+  if (usedHighFidelity) await fs.unlink(rasterizedPath).catch(() => {});
   await fs.rm(userProfileDir, { recursive: true, force: true }).catch(() => {});
 
-  return pdfBuffer;
+  return {
+    buffer: pdfBuffer,
+    audit: fontAudit,
+    integrity,
+    complexity,
+    highFidelity: usedHighFidelity,
+  };
 }
 
 // Word to PDF Route
@@ -161,7 +335,6 @@ app.post('/api/convert/word-to-pdf', upload.single('file'), async (req, res) => 
       return res.status(400).json({ error: 'No file uploaded.' });
     }
 
-    // Inspect buffer for OLE EncryptedPackage
     const buffer = req.file.buffer;
     const isOle = buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 && buffer[3] === 0xe0;
     if (isOle) {
@@ -174,15 +347,111 @@ app.post('/api/convert/word-to-pdf', upload.single('file'), async (req, res) => 
       }
     }
 
-    const pdfBuffer = await convertDocxToPdf(buffer, req.file.originalname);
+    const highFidelity = req.body.highFidelity === 'true';
+    const result = await convertDocxToPdf(buffer, req.file.originalname, { highFidelity });
+
+    if (!result.integrity.valid) {
+      return res.status(500).json({
+        error: `Conversion produced an invalid PDF: ${result.integrity.error || 'unknown reason'}.`,
+        integrityFailed: true,
+      });
+    }
+
     const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
+    const missingFontsEncoded = encodeURIComponent(JSON.stringify(result.audit.missing || []));
+    const usedFontsEncoded = encodeURIComponent(JSON.stringify(result.audit.fonts || []));
+    const warningsEncoded = encodeURIComponent(JSON.stringify(result.complexity.warnings || []));
+    const complexityFlagsEncoded = encodeURIComponent(JSON.stringify({
+      hasCharts: Boolean(result.complexity.hasCharts),
+      hasDiagrams: Boolean(result.complexity.hasDiagrams),
+      hasOleObjects: Boolean(result.complexity.hasOleObjects),
+      hasDrawingCanvas: Boolean(result.complexity.hasDrawingCanvas),
+    }));
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${originalName}.pdf"`);
-    return res.send(pdfBuffer);
+    res.setHeader('x-original-size', req.file.size.toString());
+    res.setHeader('x-converted-size', result.buffer.length.toString());
+    res.setHeader('x-page-count', String(result.integrity.pageCount || 0));
+    res.setHeader('x-text-extractable', result.integrity.textExtractable ? '1' : '0');
+    res.setHeader('x-missing-fonts', missingFontsEncoded);
+    res.setHeader('x-used-fonts', usedFontsEncoded);
+    res.setHeader('x-complexity-warnings', warningsEncoded);
+    res.setHeader('x-complexity-flags', complexityFlagsEncoded);
+    res.setHeader('x-high-fidelity', result.highFidelity ? '1' : '0');
+
+    return res.send(result.buffer);
   } catch (error) {
     console.error('Word conversion failed:', error);
-    return res.status(500).json({ error: 'Failed to convert document with LibreOffice.' });
+    return res.status(500).json({
+      error: error.message || 'Failed to convert document with LibreOffice.',
+    });
+  }
+});
+
+// DOCX analysis route — returns font audit + complexity WITHOUT converting
+app.post('/api/analyze/docx', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded.' });
+  }
+
+  const tempId = `analyze_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const tempDir = os.tmpdir();
+  const inputPath = path.join(tempDir, `${tempId}_${req.file.originalname}`);
+
+  try {
+    await fs.writeFile(inputPath, req.file.buffer);
+
+    // Run both detectors in parallel
+    const [fontAudit, complexity] = await Promise.all([
+      (async () => {
+        try {
+          const script = path.join(__dirname, 'audit_docx_fonts.py');
+          const out = await new Promise((resolve) => {
+            const py = spawn('python3', [script, inputPath]);
+            let buf = '';
+            py.stdout.on('data', (d) => { buf += d.toString(); });
+            py.on('close', () => resolve(buf));
+            py.on('error', () => resolve(''));
+          });
+          const line = out.split('\n').reverse().find((l) => l.startsWith('__RESULT__'));
+          return line ? JSON.parse(line.slice('__RESULT__'.length)) : {};
+        } catch { return {}; }
+      })(),
+      (async () => {
+        try {
+          const script = path.join(__dirname, 'detect_docx_complexity.py');
+          const out = await new Promise((resolve) => {
+            const py = spawn('python3', [script, inputPath]);
+            let buf = '';
+            py.stdout.on('data', (d) => { buf += d.toString(); });
+            py.on('close', () => resolve(buf));
+            py.on('error', () => resolve(''));
+          });
+          const line = out.split('\n').reverse().find((l) => l.startsWith('__RESULT__'));
+          return line ? JSON.parse(line.slice('__RESULT__'.length)) : {};
+        } catch { return {}; }
+      })(),
+    ]);
+
+    return res.json({
+      fonts: fontAudit.fonts || [],
+      availableFonts: fontAudit.available || [],
+      missingFonts: fontAudit.missing || [],
+      hasCharts: Boolean(complexity.hasCharts),
+      hasDiagrams: Boolean(complexity.hasDiagrams),
+      hasOleObjects: Boolean(complexity.hasOleObjects),
+      hasDrawingCanvas: Boolean(complexity.hasDrawingCanvas),
+      chartCount: complexity.chartCount || 0,
+      diagramCount: complexity.diagramCount || 0,
+      oleCount: complexity.oleCount || 0,
+      complexityWarnings: complexity.warnings || [],
+    });
+  } catch (error) {
+    console.error('DOCX analysis failed:', error);
+    return res.status(500).json({ error: 'Failed to analyze DOCX.' });
+  } finally {
+    await fs.unlink(inputPath).catch(() => {});
   }
 });
 
@@ -727,7 +996,7 @@ app.post('/api/convert/pdf-to-powerpoint', upload.single('file'), async (req, re
         'pptx',
         '--outdir',
         tempDir,
-        inputPdfPath,
+        conversionInputPath,
       ]);
 
       let stderr = '';

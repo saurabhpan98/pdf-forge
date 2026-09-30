@@ -696,7 +696,7 @@ export async function checkDocxPassword(file) {
   }
 }
 
-export async function convertWordToPDF(file) {
+export async function convertWordToPDF(file, options = {}) {
   const isLocked = await checkDocxPassword(file);
   if (isLocked) {
     const err = new Error(`Cannot process: "${file.name}" is password-protected or encrypted.`);
@@ -704,10 +704,15 @@ export async function convertWordToPDF(file) {
     throw err;
   }
 
+  const highFidelity = Boolean(options.highFidelity);
+  const endpoint = `${API_BASE_URL}/api/convert/word-to-pdf`;
+  //const endpoint = '/api/convert/word-to-pdf';
+
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('highFidelity', highFidelity ? 'true' : 'false');
 
-  const response = await fetch(`${API_BASE_URL}/api/convert/word-to-pdf`, {
+  const response = await fetch(endpoint, {
     method: 'POST',
     body: formData,
   });
@@ -719,17 +724,38 @@ export async function convertWordToPDF(file) {
       err.lockedFiles = [file.name];
       throw err;
     }
-    throw new Error(errorData.error || 'Server failed to convert Word document.');
+    const err = new Error(errorData.error || 'Server failed to convert Word document.');
+    if (errorData.integrityFailed) err.integrityFailed = true;
+    throw err;
   }
 
   const pdfBlob = await response.blob();
   const baseName = file.name.replace(/\.[^/.]+$/, '');
 
+  const decode = (header) => {
+    try {
+      const v = response.headers.get(header);
+      return v ? JSON.parse(decodeURIComponent(v)) : null;
+    } catch { return null; }
+  };
+
+  const missingFonts = decode('x-missing-fonts') || [];
+  const usedFonts = decode('x-used-fonts') || [];
+  const complexityWarnings = decode('x-complexity-warnings') || [];
+  const complexityFlags = decode('x-complexity-flags') || {};
+
   return {
     blob: pdfBlob,
     filename: `${baseName}.pdf`,
-    originalSize: file.size,
-    compressedSize: pdfBlob.size,
+    originalSize: parseInt(response.headers.get('x-original-size') || '0', 10) || file.size,
+    compressedSize: parseInt(response.headers.get('x-converted-size') || '0', 10) || pdfBlob.size,
+    missingFonts,
+    usedFonts,
+    pageCount: parseInt(response.headers.get('x-page-count') || '0', 10) || 0,
+    textExtractable: response.headers.get('x-text-extractable') === '1',
+    complexityWarnings,
+    complexityFlags,
+    highFidelity: response.headers.get('x-high-fidelity') === '1',
   };
 }
 
@@ -2805,4 +2831,29 @@ export async function repairPdf(file) {
     originalPages: origPages,
     pagesLost: Math.max(0, origPages - repairedPages),
   };
+}
+
+/* =========================================================================
+ *  ANALYZE DOCX
+ *
+ *  Runs font audit and complexity detection on the backend without
+ *  converting. Used to warn the user about chart/SmartArt/OLE content
+ *  before they choose a conversion mode.
+ * ========================================================================= */
+export async function analyzeDocx(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(`${API_BASE_URL}/api/analyze/docx`, {
+  //const response = await fetch('/api/analyze/docx', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Failed to analyze document.');
+  }
+
+  return await response.json();
 }
