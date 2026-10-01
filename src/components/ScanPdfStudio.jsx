@@ -3,7 +3,7 @@ import {
   ArrowLeft, Loader2, Download, Check, AlertCircle, Info,
   Camera, CameraOff, RotateCw, X as CloseIcon,
   Trash2, Plus, Sparkles,
-  Sun, Contrast, Palette, Droplet,
+  Sun, Contrast, Palette, Droplet, Droplets,
   Grid3X3, CheckCircle2, AlertTriangle,
   Image as ImageIcon, FileText,
   ScanLine, Crop, Wand2, GripVertical,
@@ -80,7 +80,7 @@ function InfoModal({ onClose }) {
   const steps = [
     { n: 1, icon: Camera, title: 'Capture the page', desc: 'Point your camera at the document. The live grid overlay helps you frame it flat and straight.' },
     { n: 2, icon: Crop, title: 'Adjust the corners', desc: 'Auto-detection finds the document edges. Drag any corner if the detection is off.' },
-    { n: 3, icon: Wand2, title: 'Enhance the image', desc: 'Pick Color, Grayscale, or Black & White. Fine-tune brightness and contrast until it looks like a real scan.' },
+    { n: 3, icon: Wand2, title: 'Enhance the image', desc: 'Pick Color, Grayscale, or Black & White. Fine-tune brightness, contrast, and saturation until it looks like a real scan.' },
     { n: 4, icon: FileText, title: 'Assemble the PDF', desc: 'Capture multiple pages, reorder them by dragging, and download a single multi-page PDF.' },
   ];
 
@@ -315,17 +315,18 @@ function EditView({
   enhancement, setEnhancement,
   brightness, setBrightness,
   contrast, setContrast,
+  saturation, setSaturation,
   onApply, onCancel,
   isProcessing, detectionRan, detectionFailed,
 }) {
   const containerRef = useRef(null);
   const [imgDims, setImgDims] = useState({ w: 1, h: 1, displayW: 1, displayH: 1 });
-  const [previewCanvas, setPreviewCanvas] = useState(null);
+  const [previewThumb, setPreviewThumb] = useState(null);
   const [previewDirty, setPreviewDirty] = useState(true);
   const [draggingCorner, setDraggingCorner] = useState(null);
   const [pillVisible, setPillVisible] = useState(false);
 
-  // Show the detection pill, then auto-dismiss after 5 seconds
+  // Detection pill: appears at top-center, auto-dismisses after 5 seconds
   useEffect(() => {
     if (!detectionRan) return;
     setPillVisible(true);
@@ -361,6 +362,7 @@ function EditView({
     };
   }, [imgDims.w, imgDims.h]);
 
+  // Generate a small preview thumbnail whenever enhancement changes
   useEffect(() => {
     if (!sourceCanvas) return;
     let cancelled = false;
@@ -368,15 +370,17 @@ function EditView({
     const t = setTimeout(async () => {
       if (cancelled) return;
       const warped = await warpPerspective(sourceCanvas, corners);
-      const enhanced = enhanceImage(warped, enhancement, brightness, contrast);
-      const small = downsampleCanvas(enhanced, 900);
+      const enhanced = enhanceImage(
+        warped, enhancement, brightness, contrast, saturation,
+      );
+      const small = downsampleCanvas(enhanced, 120);
       if (!cancelled) {
-        setPreviewCanvas(small);
+        setPreviewThumb(small.toDataURL('image/jpeg', 0.8));
         setPreviewDirty(false);
       }
-    }, 150);
+    }, 180);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [sourceCanvas, corners, enhancement, brightness, contrast]);
+  }, [sourceCanvas, corners, enhancement, brightness, contrast, saturation]);
 
   const beginDrag = (idx, e) => {
     e.preventDefault();
@@ -424,6 +428,7 @@ function EditView({
 
   return (
     <div className="flex flex-col h-full bg-slate-900 relative">
+      {/* Preview canvas area — shows ONLY the source image */}
       <div
         ref={containerRef}
         className="flex-1 min-h-0 flex items-center justify-center p-3 relative"
@@ -434,20 +439,11 @@ function EditView({
           style={{ width: `${imgDims.displayW}px`, height: `${imgDims.displayH}px` }}
         >
           <img
-            src={sourceCanvas?.toDataURL('image/jpeg', 0.8)}
+            src={sourceCanvas?.toDataURL('image/jpeg', 0.85)}
             alt="Captured"
             draggable={false}
             className="absolute inset-0 w-full h-full select-none pointer-events-none"
           />
-
-          {previewCanvas && !previewDirty && (
-            <img
-              src={previewCanvas.toDataURL('image/jpeg', 0.7)}
-              alt="Preview"
-              draggable={false}
-              className="absolute inset-0 w-full h-full select-none pointer-events-none opacity-60"
-            />
-          )}
 
           <svg
             className="absolute inset-0 pointer-events-none"
@@ -507,12 +503,12 @@ function EditView({
           )}
         </div>
 
-        {/* Detection pill — small, top-right, auto-dismissing */}
+        {/* Detection pill — top-center, auto-dismiss after 5s, tappable to close */}
         {pillVisible && detectionRan && (
           <button
             type="button"
             onClick={() => setPillVisible(false)}
-            className="absolute top-6 left-1/2 max-w-[55%] sm:max-w-[70%] px-2.5 py-1.5 rounded-full backdrop-blur-md bg-slate-900/85 text-white text-[10px] font-bold shadow-lg flex items-center gap-1.5 pf-anim-slide-down cursor-pointer"
+            className="absolute top-4 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full backdrop-blur-md bg-slate-900/90 text-white text-[10px] font-bold shadow-lg flex items-center gap-1.5 pf-anim-slide-down cursor-pointer max-w-[92%]"
             title="Tap to dismiss"
           >
             {detectionFailed ? (
@@ -523,7 +519,7 @@ function EditView({
             ) : (
               <>
                 <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                <span className="truncate">Corners auto-detected</span>
+                <span className="truncate">Corners auto-detected — drag to adjust</span>
               </>
             )}
             <CloseIcon className="w-3 h-3 text-slate-400 shrink-0" />
@@ -531,11 +527,27 @@ function EditView({
         )}
       </div>
 
-      <div className="shrink-0 bg-white border-t border-slate-200 p-4 space-y-4 max-h-[46vh] overflow-y-auto">
+      {/* Compact settings panel */}
+      <div className="shrink-0 bg-white border-t border-slate-200 p-3 space-y-3 max-h-[36vh] overflow-y-auto">
+        {/* Enhancement modes with preview thumbnail */}
         <div>
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
-            Enhancement
-          </p>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+              Enhancement
+            </p>
+            {previewThumb && (
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] font-bold text-slate-400">Preview</span>
+                <img
+                  src={previewThumb}
+                  alt="Preview"
+                  className={`w-8 h-8 rounded-md object-cover border border-slate-200 ${
+                    previewDirty ? 'opacity-50' : 'opacity-100'
+                  }`}
+                />
+              </div>
+            )}
+          </div>
           <div className="grid grid-cols-3 gap-2">
             {ENHANCE_MODES.map((m) => {
               const Icon = m.icon;
@@ -545,26 +557,27 @@ function EditView({
                   key={m.id}
                   type="button"
                   onClick={() => setEnhancement(m.id)}
-                  className={`p-3 rounded-2xl border-2 flex flex-col items-center gap-1.5 transition cursor-pointer ${
+                  className={`p-2.5 rounded-2xl border-2 flex flex-col items-center gap-1 transition cursor-pointer ${
                     activeMode
                       ? 'border-red-500 bg-red-50/60 ring-2 ring-red-500/20'
                       : 'border-slate-200 bg-white hover:bg-slate-50'
                   }`}
                 >
                   <Icon className={`w-4 h-4 ${activeMode ? 'text-red-600' : 'text-slate-500'}`} />
-                  <span className={`text-[11px] font-black ${activeMode ? 'text-red-700' : 'text-slate-700'}`}>
+                  <span className={`text-[11px] font-black leading-none ${activeMode ? 'text-red-700' : 'text-slate-700'}`}>
                     {m.label}
                   </span>
-                  <span className="text-[9px] text-slate-500 leading-tight text-center">{m.desc}</span>
                 </button>
               );
             })}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {/* Three sliders: brightness, contrast, saturation */}
+        <div className="space-y-2.5">
+          {/* Brightness */}
           <div>
-            <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center justify-between mb-1">
               <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1">
                 <Sun className="w-3 h-3" />
                 Brightness
@@ -582,8 +595,10 @@ function EditView({
               className="w-full h-1.5 bg-slate-200 rounded-full appearance-none cursor-pointer accent-red-600"
             />
           </div>
+
+          {/* Contrast */}
           <div>
-            <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center justify-between mb-1">
               <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1">
                 <Contrast className="w-3 h-3" />
                 Contrast
@@ -601,14 +616,36 @@ function EditView({
               className="w-full h-1.5 bg-slate-200 rounded-full appearance-none cursor-pointer accent-red-600"
             />
           </div>
+
+          {/* Saturation */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                <Droplets className="w-3 h-3" />
+                Saturation
+              </label>
+              <span className="text-[10px] font-bold text-slate-700 tabular-nums bg-slate-100 px-2 py-0.5 rounded-full">
+                {saturation}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="200"
+              value={saturation}
+              onChange={(e) => setSaturation(parseInt(e.target.value, 10))}
+              className="w-full h-1.5 bg-slate-200 rounded-full appearance-none cursor-pointer accent-red-600"
+            />
+          </div>
         </div>
 
+        {/* Actions */}
         <div className="flex gap-2 pt-1">
           <button
             type="button"
             onClick={onCancel}
             disabled={isProcessing}
-            className="flex-1 py-3 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-2xl text-sm font-bold transition cursor-pointer disabled:opacity-50"
+            className="flex-1 py-2.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-2xl text-sm font-bold transition cursor-pointer disabled:opacity-50"
           >
             Retake
           </button>
@@ -616,7 +653,7 @@ function EditView({
             type="button"
             onClick={onApply}
             disabled={isProcessing}
-            className="flex-1 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-2xl text-sm font-bold shadow-md shadow-red-600/20 transition flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]"
+            className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-2xl text-sm font-bold shadow-md shadow-red-600/20 transition flex items-center justify-center gap-2 cursor-pointer active:scale-[0.98]"
           >
             {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
             <span>{isProcessing ? 'Processing…' : 'Add page'}</span>
@@ -628,7 +665,7 @@ function EditView({
 }
 
 // ---------------------------------------------------------------------------
-// Review view — pointer-based drag reorder (works on desktop AND touch)
+// Review view — pointer-based drag reorder (desktop + touch)
 // ---------------------------------------------------------------------------
 function ReviewView({
   pages, onReorder, onDelete, onAddMore,
@@ -646,7 +683,6 @@ function ReviewView({
     startY: 0,
   });
 
-  // Prevent scrolling while a drag is active
   useEffect(() => {
     if (draggedIndex === null) return;
     const el = gridRef.current;
@@ -657,9 +693,7 @@ function ReviewView({
   }, [draggedIndex]);
 
   const beginDrag = (index, e) => {
-    // Only primary pointer
     if (!e.isPrimary) return;
-
     const isMouse = e.pointerType === 'mouse';
     const ref = dragRef.current;
 
@@ -669,16 +703,13 @@ function ReviewView({
     ref.pointerId = e.pointerId;
     ref.active = false;
 
-    // Cancel any pending timer
     if (ref.timer) { clearTimeout(ref.timer); ref.timer = null; }
 
     if (isMouse) {
-      // Mouse: start immediately
       ref.active = true;
       setDraggedIndex(index);
       setOverIndex(index);
     } else {
-      // Touch / pen: wait 250 ms for a long-press
       ref.timer = setTimeout(() => {
         ref.timer = null;
         ref.active = true;
@@ -688,7 +719,6 @@ function ReviewView({
       }, 250);
     }
 
-    // Attach global listeners
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
@@ -699,7 +729,6 @@ function ReviewView({
     if (ref.pointerId !== e.pointerId) return;
 
     if (!ref.active) {
-      // If the finger moves too far before the long-press fires, cancel
       const dx = e.clientX - ref.startX;
       const dy = e.clientY - ref.startY;
       if (Math.hypot(dx, dy) > 10) {
@@ -710,7 +739,6 @@ function ReviewView({
       return;
     }
 
-    // Active drag: find the card under the pointer
     const el = document.elementFromPoint(e.clientX, e.clientY);
     const card = el && el.closest ? el.closest('[data-review-index]') : null;
     if (card) {
@@ -750,7 +778,6 @@ function ReviewView({
   return (
     <div className="flex flex-col h-full bg-slate-50">
       <div className="flex-1 min-h-0 overflow-y-auto p-4">
-        {/* Hint */}
         <div className="mb-3 p-2.5 bg-red-50 border border-red-100 rounded-2xl text-[11px] text-red-900 flex items-center gap-2">
           <GripVertical className="w-3.5 h-3.5 text-red-500 shrink-0" />
           <span>
@@ -795,12 +822,10 @@ function ReviewView({
                   />
                 </div>
 
-                {/* Position badge */}
                 <div className="absolute top-2 left-2 px-2 py-1 rounded-lg bg-slate-900/80 backdrop-blur-md text-white text-[10px] font-black">
                   {i + 1}
                 </div>
 
-                {/* Delete button */}
                 <button
                   type="button"
                   onPointerDown={(e) => e.stopPropagation()}
@@ -812,13 +837,11 @@ function ReviewView({
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
 
-                {/* Grip indicator */}
                 <div className="absolute bottom-2 left-1/2 -translate-x-1/2 px-2 py-1 rounded-lg bg-slate-900/70 backdrop-blur-md text-white flex items-center gap-1 opacity-70 sm:opacity-0 sm:group-hover:opacity-100 transition pointer-events-none">
                   <GripVertical className="w-3 h-3" />
                   <span className="text-[9px] font-bold">Drag</span>
                 </div>
 
-                {/* "Moving" pill on the dragged card */}
                 {isDragging && (
                   <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex justify-center pointer-events-none">
                     <span className="px-2 py-0.5 bg-red-500 text-white text-[9px] font-black uppercase tracking-wider rounded-full shadow pf-anim-slide-down">
@@ -830,7 +853,6 @@ function ReviewView({
             );
           })}
 
-          {/* Add more tile */}
           <button
             type="button"
             onClick={onAddMore}
@@ -915,6 +937,7 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
   const [enhancement, setEnhancement] = useState('color');
   const [brightness, setBrightness] = useState(100);
   const [contrast, setContrast] = useState(100);
+  const [saturation, setSaturation] = useState(100);
   const [isProcessing, setIsProcessing] = useState(false);
   const [detectionRan, setDetectionRan] = useState(false);
   const [detectionFailed, setDetectionFailed] = useState(false);
@@ -1036,7 +1059,9 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
     setErrorMsg('');
     try {
       const warped = await warpPerspective(sourceCanvas, corners);
-      const enhanced = enhanceImage(warped, enhancement, brightness, contrast);
+      const enhanced = enhanceImage(
+        warped, enhancement, brightness, contrast, saturation,
+      );
       const thumb = downsampleCanvas(enhanced, 400);
 
       const id = `page-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -1047,6 +1072,7 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
         enhancement,
         brightness,
         contrast,
+        saturation,
       };
 
       setPages((prev) => [...prev, newPage]);
@@ -1219,7 +1245,7 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
             className="flex items-center space-x-1.5 text-slate-600 hover:text-slate-900 font-semibold text-xs sm:text-sm px-2 sm:px-2.5 py-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer shrink-0"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span className="xs:inline">Back to Home</span>
+            <span className="hidden sm:inline">Back to Home</span>
           </button>
 
           <div className="flex items-center space-x-2 min-w-0 flex-1 justify-center">
@@ -1311,6 +1337,8 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
             setBrightness={setBrightness}
             contrast={contrast}
             setContrast={setContrast}
+            saturation={saturation}
+            setSaturation={setSaturation}
             onApply={handleApplyEdit}
             onCancel={handleCancelEdit}
             isProcessing={isProcessing}

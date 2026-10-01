@@ -312,7 +312,13 @@ function cropToRect(sourceCanvas, corners) {
  * brightness: 0..200 (100 = neutral)
  * contrast: 0..200 (100 = neutral)
  */
-export function enhanceImage(sourceCanvas, mode = 'color', brightness = 100, contrast = 100) {
+export function enhanceImage(
+  sourceCanvas,
+  mode = 'color',
+  brightness = 100,
+  contrast = 100,
+  saturation = 100,
+) {
   const w = sourceCanvas.width;
   const h = sourceCanvas.height;
   const out = document.createElement('canvas');
@@ -320,11 +326,12 @@ export function enhanceImage(sourceCanvas, mode = 'color', brightness = 100, con
   out.height = h;
   const ctx = out.getContext('2d', { willReadFrequently: true });
 
-  // Build a CSS filter string for brightness and contrast
   const filters = [];
   if (brightness !== 100) filters.push(`brightness(${brightness / 100})`);
   if (contrast !== 100) filters.push(`contrast(${contrast / 100})`);
+  if (saturation !== 100) filters.push(`saturate(${saturation / 100})`);
 
+  // Grayscale mode forces full desaturation regardless of the slider.
   if (mode === 'gray') {
     filters.push('grayscale(1)');
   }
@@ -334,17 +341,15 @@ export function enhanceImage(sourceCanvas, mode = 'color', brightness = 100, con
   ctx.filter = 'none';
 
   if (mode === 'bw') {
-    // Adaptive black & white threshold via local mean.
+    // Adaptive black & white threshold via local mean (integral image).
     const img = ctx.getImageData(0, 0, w, h);
     const data = img.data;
 
-    // First convert to grayscale
     for (let i = 0; i < data.length; i += 4) {
       const g = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
       data[i] = data[i + 1] = data[i + 2] = g;
     }
 
-    // Local mean filter with a box blur over a small window
     const W = 15;
     const halfW = (W - 1) >> 1;
     const grayVals = new Uint8Array(w * h);
@@ -352,7 +357,6 @@ export function enhanceImage(sourceCanvas, mode = 'color', brightness = 100, con
       grayVals[i] = data[i * 4];
     }
 
-    // Build integral image for fast box sums
     const integral = new Uint32Array((w + 1) * (h + 1));
     for (let y = 1; y <= h; y++) {
       let rowSum = 0;
@@ -362,7 +366,7 @@ export function enhanceImage(sourceCanvas, mode = 'color', brightness = 100, con
       }
     }
 
-    const C = 8; // tunable threshold offset
+    const C = 8;
 
     for (let y = 0; y < h; y++) {
       const y0 = Math.max(0, y - halfW);
