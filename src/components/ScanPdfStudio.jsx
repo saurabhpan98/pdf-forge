@@ -1,13 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   ArrowLeft, Loader2, Download, Check, AlertCircle, Info,
-  Camera, CameraOff, RefreshCw, X as CloseIcon,
-  RotateCcw, RotateCw, Trash2, Plus, Sparkles,
+  Camera, CameraOff, RotateCw, X as CloseIcon,
+  Trash2, Plus, Sparkles,
   Sun, Contrast, Palette, Droplet,
-  Grid3X3, Move, CheckCircle2, AlertTriangle,
-  Smartphone, Image as ImageIcon, FileText,
-  ChevronLeft, ChevronRight, Wand2,
-  ScanLine, Maximize2, Crop, Zap,
+  Grid3X3, CheckCircle2, AlertTriangle,
+  Image as ImageIcon, FileText,
+  ScanLine, Crop, Wand2, GripVertical,
 } from 'lucide-react';
 import { useCamera } from '../hooks/useCamera';
 import {
@@ -23,14 +22,14 @@ import { buildScannedPdf } from '../utils/pdfWorker';
 // Constants
 // ---------------------------------------------------------------------------
 const ENHANCE_MODES = [
-  { id: 'color', label: 'Color',    icon: Palette, desc: 'Preserves colors' },
-  { id: 'gray',  label: 'Gray',     icon: Contrast, desc: 'Removes paper tint' },
-  { id: 'bw',    label: 'B&W',      icon: Droplet, desc: 'Text becomes pure black' },
+  { id: 'color', label: 'Color', icon: Palette,  desc: 'Preserves colors' },
+  { id: 'gray',  label: 'Gray',  icon: Contrast, desc: 'Removes paper tint' },
+  { id: 'bw',    label: 'B&W',   icon: Droplet,  desc: 'Pure black text' },
 ];
 
 const QUALITY_PRESETS = [
-  { id: 'small',  label: 'Small file', quality: 0.65, maxPx: 1400 },
-  { id: 'medium', label: 'Balanced',   quality: 0.82, maxPx: 2000 },
+  { id: 'small',  label: 'Small file',  quality: 0.65, maxPx: 1400 },
+  { id: 'medium', label: 'Balanced',    quality: 0.82, maxPx: 2000 },
   { id: 'large',  label: 'High detail', quality: 0.94, maxPx: 3000 },
 ];
 
@@ -41,7 +40,7 @@ function AnimatedInfoButton({ onClick }) {
   return (
     <button
       onClick={onClick}
-      className="pf-anim-pulse-ring relative w-9 h-9 rounded-full bg-gradient-to-br from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white flex items-center justify-center shadow-md shadow-red-500/30 transition-all cursor-pointer active:scale-95 shrink-0"
+      className="pf-anim-pulse-ring relative w-6 h-6 ml-1 rounded-full bg-gradient-to-br from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white flex items-center justify-center shadow-md shadow-red-500/30 transition-all cursor-pointer active:scale-95 shrink-0"
       title="How does Scan to PDF work?"
       aria-label="Show scan info"
     >
@@ -82,7 +81,7 @@ function InfoModal({ onClose }) {
     { n: 1, icon: Camera, title: 'Capture the page', desc: 'Point your camera at the document. The live grid overlay helps you frame it flat and straight.' },
     { n: 2, icon: Crop, title: 'Adjust the corners', desc: 'Auto-detection finds the document edges. Drag any corner if the detection is off.' },
     { n: 3, icon: Wand2, title: 'Enhance the image', desc: 'Pick Color, Grayscale, or Black & White. Fine-tune brightness and contrast until it looks like a real scan.' },
-    { n: 4, icon: FileText, title: 'Assemble the PDF', desc: 'Capture multiple pages, reorder them if needed, and download a single multi-page PDF.' },
+    { n: 4, icon: FileText, title: 'Assemble the PDF', desc: 'Capture multiple pages, reorder them by dragging, and download a single multi-page PDF.' },
   ];
 
   return (
@@ -170,64 +169,24 @@ function InfoModal({ onClose }) {
 }
 
 // ---------------------------------------------------------------------------
-// Loading card (used while OpenCV initialises)
-// ---------------------------------------------------------------------------
-function LoadingCard({ message }) {
-  return (
-    <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4 pf-anim-fade-up">
-      <div className="flex items-center gap-4">
-        <div className="relative w-14 h-14 flex items-center justify-center shrink-0">
-          <div className="absolute inset-0 rounded-full bg-red-200/50 blur-md" />
-          <div className="absolute inset-0 pf-anim-orbit">
-            <span className="absolute top-0 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-red-400 shadow" />
-          </div>
-          <div className="relative w-11 h-11 rounded-2xl bg-gradient-to-br from-red-500 to-rose-600 flex items-center justify-center shadow-lg pf-anim-breathe">
-            <ScanLine className="w-5 h-5 text-white" />
-          </div>
-        </div>
-        <div className="min-w-0 flex-1">
-          <h3 className="text-base font-black text-slate-900 tracking-tight">
-            {message}
-          </h3>
-          <p className="text-[11.5px] text-slate-500 mt-0.5">
-            One-time download — cached for next time.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Camera view
 // ---------------------------------------------------------------------------
 function CameraView({
-  videoRef,
-  active,
-  error,
-  hasCamera,
-  onCapture,
-  onSwitch,
-  onPickFile,
-  onRequestCamera,
-  captureFlash,
-  showGrid,
-  onToggleGrid,
+  videoRef, active, error, hasCamera,
+  onCapture, onSwitch, onPickFile, onRequestCamera,
+  captureFlash, showGrid, onToggleGrid,
 }) {
   const [opencvLoading, setOpencvLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setOpencvLoading(true);
-    loadOpenCV().then(() => {
-      if (!cancelled) setOpencvLoading(false);
-    });
+    loadOpenCV().then(() => { if (!cancelled) setOpencvLoading(false); });
     return () => { cancelled = true; };
   }, []);
 
   return (
     <div className="relative w-full h-full bg-black">
-      {/* Video layer */}
       <video
         ref={videoRef}
         autoPlay
@@ -236,7 +195,6 @@ function CameraView({
         className="absolute inset-0 w-full h-full object-cover"
       />
 
-      {/* Grid overlay */}
       {active && showGrid && (
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute inset-[8%] border-2 border-white/40 rounded-lg" />
@@ -248,12 +206,13 @@ function CameraView({
         </div>
       )}
 
-      {/* Capture flash */}
       {captureFlash && (
-        <div className="absolute inset-0 bg-white pf-anim-fade-in pointer-events-none" style={{ animationDuration: '0.15s' }} />
+        <div
+          className="absolute inset-0 bg-white pf-anim-fade-in pointer-events-none"
+          style={{ animationDuration: '0.15s' }}
+        />
       )}
 
-      {/* Error state */}
       {!active && (
         <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center space-y-4 bg-slate-900">
           <div className="w-16 h-16 rounded-2xl bg-slate-800 flex items-center justify-center">
@@ -288,10 +247,8 @@ function CameraView({
         </div>
       )}
 
-      {/* Active UI overlay */}
       {active && (
         <>
-          {/* Top row */}
           <div className="absolute top-0 left-0 right-0 p-4 flex items-center justify-between gap-2">
             <button
               onClick={onToggleGrid}
@@ -317,7 +274,6 @@ function CameraView({
             </button>
           </div>
 
-          {/* Bottom controls */}
           <div className="absolute bottom-0 left-0 right-0 p-6 pb-8 flex items-center justify-center gap-6">
             <button
               onClick={onPickFile}
@@ -327,7 +283,6 @@ function CameraView({
               <ImageIcon className="w-5 h-5" />
             </button>
 
-            {/* Shutter */}
             <button
               onClick={onCapture}
               className="relative w-20 h-20 rounded-full bg-white flex items-center justify-center shadow-2xl active:scale-95 transition cursor-pointer"
@@ -337,7 +292,6 @@ function CameraView({
               <div className="absolute inset-1.5 rounded-full border-2 border-slate-900/20" />
             </button>
 
-            {/* Placeholder for symmetry */}
             <div className="w-12 h-12" />
           </div>
 
@@ -354,47 +308,42 @@ function CameraView({
 }
 
 // ---------------------------------------------------------------------------
-// Corner adjustment editor
+// Edit view — corner adjustment + enhancement
 // ---------------------------------------------------------------------------
 function EditView({
-  sourceCanvas,
-  corners,
-  setCorners,
-  enhancement,
-  setEnhancement,
-  brightness,
-  setBrightness,
-  contrast,
-  setContrast,
-  onApply,
-  onCancel,
-  isProcessing,
-  detectionRan,
-  detectionFailed,
+  sourceCanvas, corners, setCorners,
+  enhancement, setEnhancement,
+  brightness, setBrightness,
+  contrast, setContrast,
+  onApply, onCancel,
+  isProcessing, detectionRan, detectionFailed,
 }) {
   const containerRef = useRef(null);
   const [imgDims, setImgDims] = useState({ w: 1, h: 1, displayW: 1, displayH: 1 });
   const [previewCanvas, setPreviewCanvas] = useState(null);
   const [previewDirty, setPreviewDirty] = useState(true);
   const [draggingCorner, setDraggingCorner] = useState(null);
+  const [pillVisible, setPillVisible] = useState(false);
 
-  // Load image dimensions from source canvas
+  // Show the detection pill, then auto-dismiss after 5 seconds
+  useEffect(() => {
+    if (!detectionRan) return;
+    setPillVisible(true);
+    const t = setTimeout(() => setPillVisible(false), 5000);
+    return () => clearTimeout(t);
+  }, [detectionRan]);
+
   useEffect(() => {
     if (!sourceCanvas) return;
-    setImgDims((prev) => ({
-      ...prev,
-      w: sourceCanvas.width,
-      h: sourceCanvas.height,
-    }));
+    setImgDims((prev) => ({ ...prev, w: sourceCanvas.width, h: sourceCanvas.height }));
   }, [sourceCanvas]);
 
-  // Compute display size to fit container
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !imgDims.w) return;
     const update = () => {
-      const availW = el.clientWidth - 32;
-      const availH = el.clientHeight - 32;
+      const availW = el.clientWidth - 24;
+      const availH = el.clientHeight - 24;
       const scale = Math.min(availW / imgDims.w, availH / imgDims.h);
       setImgDims((prev) => ({
         ...prev,
@@ -412,7 +361,6 @@ function EditView({
     };
   }, [imgDims.w, imgDims.h]);
 
-  // Generate a live preview whenever enhancement changes
   useEffect(() => {
     if (!sourceCanvas) return;
     let cancelled = false;
@@ -430,7 +378,6 @@ function EditView({
     return () => { cancelled = true; clearTimeout(t); };
   }, [sourceCanvas, corners, enhancement, brightness, contrast]);
 
-  // Drag handling for corners
   const beginDrag = (idx, e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -441,8 +388,6 @@ function EditView({
       const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
       const el = containerRef.current;
       if (!el) return;
-      const rect = el.getBoundingClientRect();
-      // Account for the frame's own offset within the container
       const frameEl = el.querySelector('[data-scan-frame="1"]');
       if (!frameEl) return;
       const fRect = frameEl.getBoundingClientRect();
@@ -471,27 +416,23 @@ function EditView({
     window.addEventListener('touchend', onUp);
   };
 
-  // Convert corner coords to display coords for overlay
   const displayCorners = corners.map((c) => ({
     x: (c.x / imgDims.w) * imgDims.displayW,
     y: (c.y / imgDims.h) * imgDims.displayH,
   }));
-
   const polygonPoints = displayCorners.map((c) => `${c.x},${c.y}`).join(' ');
 
   return (
-    <div className="flex flex-col h-full bg-slate-900">
-      {/* Preview area */}
+    <div className="flex flex-col h-full bg-slate-900 relative">
       <div
         ref={containerRef}
-        className="flex-1 min-h-0 flex items-center justify-center p-4 relative"
+        className="flex-1 min-h-0 flex items-center justify-center p-3 relative"
       >
         <div
           data-scan-frame="1"
           className="relative bg-white rounded-lg overflow-hidden shadow-2xl"
           style={{ width: `${imgDims.displayW}px`, height: `${imgDims.displayH}px` }}
         >
-          {/* Source image */}
           <img
             src={sourceCanvas?.toDataURL('image/jpeg', 0.8)}
             alt="Captured"
@@ -499,7 +440,6 @@ function EditView({
             className="absolute inset-0 w-full h-full select-none pointer-events-none"
           />
 
-          {/* Enhancement preview (semi-transparent overlay when ready) */}
           {previewCanvas && !previewDirty && (
             <img
               src={previewCanvas.toDataURL('image/jpeg', 0.7)}
@@ -509,14 +449,12 @@ function EditView({
             />
           )}
 
-          {/* Corner quad overlay */}
           <svg
             className="absolute inset-0 pointer-events-none"
             width={imgDims.displayW}
             height={imgDims.displayH}
             viewBox={`0 0 ${imgDims.displayW} ${imgDims.displayH}`}
           >
-            {/* Shaded region outside the quad */}
             <defs>
               <mask id="scanMask">
                 <rect x="0" y="0" width={imgDims.displayW} height={imgDims.displayH} fill="white" />
@@ -524,10 +462,8 @@ function EditView({
               </mask>
             </defs>
             <rect
-              x="0"
-              y="0"
-              width={imgDims.displayW}
-              height={imgDims.displayH}
+              x="0" y="0"
+              width={imgDims.displayW} height={imgDims.displayH}
               fill="rgba(0,0,0,0.55)"
               mask="url(#scanMask)"
             />
@@ -540,20 +476,19 @@ function EditView({
             />
           </svg>
 
-          {/* Corner handles */}
           {displayCorners.map((c, i) => (
             <button
               key={i}
               onMouseDown={(e) => beginDrag(i, e)}
               onTouchStart={(e) => beginDrag(i, e)}
-              className={`absolute rounded-full border-3 shadow-lg cursor-grab active:cursor-grabbing transition-transform ${
+              className={`absolute rounded-full shadow-lg cursor-grab active:cursor-grabbing transition-transform ${
                 draggingCorner === i ? 'scale-125 bg-red-600' : 'bg-white'
               }`}
               style={{
-                width: 28,
-                height: 28,
+                width: 28, height: 28,
                 borderColor: '#ef4444',
                 borderWidth: 3,
+                borderStyle: 'solid',
                 left: c.x - 14,
                 top: c.y - 14,
                 touchAction: 'none',
@@ -572,27 +507,31 @@ function EditView({
           )}
         </div>
 
-        {/* Detection status pill */}
-        {detectionRan && (
-          <div className="absolute top-6 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full backdrop-blur-md bg-white/95 text-slate-900 text-[10px] font-bold shadow-lg flex items-center gap-1.5">
+        {/* Detection pill — small, top-right, auto-dismissing */}
+        {pillVisible && detectionRan && (
+          <button
+            type="button"
+            onClick={() => setPillVisible(false)}
+            className="absolute top-6 left-1/2 max-w-[55%] sm:max-w-[70%] px-2.5 py-1.5 rounded-full backdrop-blur-md bg-slate-900/85 text-white text-[10px] font-bold shadow-lg flex items-center gap-1.5 pf-anim-slide-down cursor-pointer"
+            title="Tap to dismiss"
+          >
             {detectionFailed ? (
               <>
-                <AlertTriangle className="w-3 h-3 text-amber-500" />
-                <span>Auto-detect unavailable — adjust corners manually</span>
+                <AlertTriangle className="w-3 h-3 text-amber-400 shrink-0" />
+                <span className="truncate">Adjust corners manually</span>
               </>
             ) : (
               <>
-                <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-                <span>Corners detected — drag to adjust if needed</span>
+                <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                <span className="truncate">Corners auto-detected</span>
               </>
             )}
-          </div>
+            <CloseIcon className="w-3 h-3 text-slate-400 shrink-0" />
+          </button>
         )}
       </div>
 
-      {/* Controls */}
       <div className="shrink-0 bg-white border-t border-slate-200 p-4 space-y-4 max-h-[46vh] overflow-y-auto">
-        {/* Enhancement modes */}
         <div>
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
             Enhancement
@@ -616,14 +555,13 @@ function EditView({
                   <span className={`text-[11px] font-black ${activeMode ? 'text-red-700' : 'text-slate-700'}`}>
                     {m.label}
                   </span>
-                  <span className="text-[9px] text-slate-500 leading-tight">{m.desc}</span>
+                  <span className="text-[9px] text-slate-500 leading-tight text-center">{m.desc}</span>
                 </button>
               );
             })}
           </div>
         </div>
 
-        {/* Brightness + Contrast sliders */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <div className="flex items-center justify-between mb-1.5">
@@ -665,7 +603,6 @@ function EditView({
           </div>
         </div>
 
-        {/* Actions */}
         <div className="flex gap-2 pt-1">
           <button
             type="button"
@@ -691,81 +628,207 @@ function EditView({
 }
 
 // ---------------------------------------------------------------------------
-// Review view
+// Review view — pointer-based drag reorder (works on desktop AND touch)
 // ---------------------------------------------------------------------------
 function ReviewView({
-  pages,
-  onReorder,
-  onDelete,
-  onAddMore,
-  quality,
-  setQuality,
-  onGenerate,
-  isBuilding,
+  pages, onReorder, onDelete, onAddMore,
+  quality, setQuality, onGenerate, isBuilding,
 }) {
   const [draggedIndex, setDraggedIndex] = useState(null);
   const [overIndex, setOverIndex] = useState(null);
+  const gridRef = useRef(null);
+  const dragRef = useRef({
+    timer: null,
+    active: false,
+    fromIndex: null,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+  });
 
-  const handleDragStart = (e, i) => {
-    e.dataTransfer.effectAllowed = 'move';
-    setDraggedIndex(i);
-  };
-  const handleDragOver = (e, i) => {
-    e.preventDefault();
-    if (overIndex !== i) setOverIndex(i);
-  };
-  const handleDrop = (e, i) => {
-    e.preventDefault();
-    if (draggedIndex !== null && draggedIndex !== i) {
-      onReorder(draggedIndex, i);
+  // Prevent scrolling while a drag is active
+  useEffect(() => {
+    if (draggedIndex === null) return;
+    const el = gridRef.current;
+    if (!el) return;
+    const prevent = (e) => { if (dragRef.current.active) e.preventDefault(); };
+    el.addEventListener('touchmove', prevent, { passive: false });
+    return () => el.removeEventListener('touchmove', prevent);
+  }, [draggedIndex]);
+
+  const beginDrag = (index, e) => {
+    // Only primary pointer
+    if (!e.isPrimary) return;
+
+    const isMouse = e.pointerType === 'mouse';
+    const ref = dragRef.current;
+
+    ref.startX = e.clientX;
+    ref.startY = e.clientY;
+    ref.fromIndex = index;
+    ref.pointerId = e.pointerId;
+    ref.active = false;
+
+    // Cancel any pending timer
+    if (ref.timer) { clearTimeout(ref.timer); ref.timer = null; }
+
+    if (isMouse) {
+      // Mouse: start immediately
+      ref.active = true;
+      setDraggedIndex(index);
+      setOverIndex(index);
+    } else {
+      // Touch / pen: wait 250 ms for a long-press
+      ref.timer = setTimeout(() => {
+        ref.timer = null;
+        ref.active = true;
+        setDraggedIndex(index);
+        setOverIndex(index);
+        try { if (navigator.vibrate) navigator.vibrate(12); } catch { /* ignore */ }
+      }, 250);
     }
+
+    // Attach global listeners
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  };
+
+  const onMove = (e) => {
+    const ref = dragRef.current;
+    if (ref.pointerId !== e.pointerId) return;
+
+    if (!ref.active) {
+      // If the finger moves too far before the long-press fires, cancel
+      const dx = e.clientX - ref.startX;
+      const dy = e.clientY - ref.startY;
+      if (Math.hypot(dx, dy) > 10) {
+        if (ref.timer) { clearTimeout(ref.timer); ref.timer = null; }
+        ref.pointerId = null;
+        ref.fromIndex = null;
+      }
+      return;
+    }
+
+    // Active drag: find the card under the pointer
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const card = el && el.closest ? el.closest('[data-review-index]') : null;
+    if (card) {
+      const overIdx = parseInt(card.getAttribute('data-review-index'), 10);
+      if (!isNaN(overIdx) && overIdx !== overIndex) {
+        setOverIndex(overIdx);
+      }
+    }
+  };
+
+  const onUp = (e) => {
+    const ref = dragRef.current;
+    if (ref.pointerId !== e.pointerId) return;
+
+    if (ref.timer) { clearTimeout(ref.timer); ref.timer = null; }
+
+    const wasActive = ref.active;
+    const fromIdx = ref.fromIndex;
+    const toIdx = overIndex;
+
+    ref.active = false;
+    ref.fromIndex = null;
+    ref.pointerId = null;
+
     setDraggedIndex(null);
     setOverIndex(null);
+
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onUp);
+
+    if (wasActive && fromIdx != null && toIdx != null && fromIdx !== toIdx) {
+      onReorder(fromIdx, toIdx);
+    }
   };
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
       <div className="flex-1 min-h-0 overflow-y-auto p-4">
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-          {pages.map((page, i) => (
-            <div
-              key={page.id}
-              draggable
-              onDragStart={(e) => handleDragStart(e, i)}
-              onDragOver={(e) => handleDragOver(e, i)}
-              onDrop={(e) => handleDrop(e, i)}
-              onDragEnd={() => { setDraggedIndex(null); setOverIndex(null); }}
-              className={`group relative rounded-2xl border-2 bg-white overflow-hidden shadow-sm cursor-grab active:cursor-grabbing transition-all ${
-                draggedIndex === i ? 'opacity-40 scale-95' : ''
-              } ${
-                overIndex === i && draggedIndex !== i
-                  ? 'border-red-500 ring-4 ring-red-400/30'
-                  : 'border-slate-200 hover:border-slate-300'
-              }`}
-            >
-              <div className="aspect-[3/4] bg-slate-100 flex items-center justify-center overflow-hidden">
-                <img
-                  src={page.thumbnail}
-                  alt={`Page ${i + 1}`}
-                  className="w-full h-full object-contain"
-                  draggable={false}
-                />
-              </div>
+        {/* Hint */}
+        <div className="mb-3 p-2.5 bg-red-50 border border-red-100 rounded-2xl text-[11px] text-red-900 flex items-center gap-2">
+          <GripVertical className="w-3.5 h-3.5 text-red-500 shrink-0" />
+          <span>
+            <strong>Drag any page</strong> to reorder. On mobile, press and hold first.
+          </span>
+        </div>
 
-              <div className="absolute top-2 left-2 px-2 py-1 rounded-lg bg-slate-900/80 backdrop-blur-md text-white text-[10px] font-black">
-                {i + 1}
-              </div>
+        <div
+          ref={gridRef}
+          className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3"
+        >
+          {pages.map((page, i) => {
+            const isDragging = draggedIndex === i;
+            const isOver = overIndex === i && draggedIndex !== null && draggedIndex !== i;
 
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); onDelete(i); }}
-                className="absolute top-2 right-2 w-8 h-8 rounded-lg bg-white/95 backdrop-blur-md text-slate-700 hover:bg-red-50 hover:text-red-600 shadow-md flex items-center justify-center opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition"
-                title="Delete page"
+            return (
+              <div
+                key={page.id}
+                data-review-index={i}
+                onPointerDown={(e) => beginDrag(i, e)}
+                onContextMenu={(e) => { if (dragRef.current.active) e.preventDefault(); }}
+                style={{
+                  touchAction: draggedIndex !== null ? 'none' : 'manipulation',
+                  WebkitTouchCallout: draggedIndex !== null ? 'none' : 'default',
+                  WebkitUserSelect: 'none',
+                  userSelect: 'none',
+                }}
+                className={`group relative rounded-2xl border-2 bg-white overflow-hidden shadow-sm cursor-grab active:cursor-grabbing transition-all duration-200 ${
+                  isDragging ? 'opacity-40 scale-95 border-red-400' : ''
+                } ${
+                  isOver
+                    ? 'border-red-500 ring-4 ring-red-400/30 scale-105 shadow-lg z-10 bg-red-50'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
               >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ))}
+                <div className="aspect-[3/4] bg-slate-100 flex items-center justify-center overflow-hidden">
+                  <img
+                    src={page.thumbnail}
+                    alt={`Page ${i + 1}`}
+                    className="w-full h-full object-contain pointer-events-none"
+                    draggable={false}
+                  />
+                </div>
+
+                {/* Position badge */}
+                <div className="absolute top-2 left-2 px-2 py-1 rounded-lg bg-slate-900/80 backdrop-blur-md text-white text-[10px] font-black">
+                  {i + 1}
+                </div>
+
+                {/* Delete button */}
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); onDelete(i); }}
+                  className="absolute top-2 right-2 w-8 h-8 rounded-lg bg-white/95 backdrop-blur-md text-slate-700 hover:bg-red-50 hover:text-red-600 shadow-md flex items-center justify-center opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition cursor-pointer"
+                  title="Delete page"
+                  aria-label={`Delete page ${i + 1}`}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+
+                {/* Grip indicator */}
+                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 px-2 py-1 rounded-lg bg-slate-900/70 backdrop-blur-md text-white flex items-center gap-1 opacity-70 sm:opacity-0 sm:group-hover:opacity-100 transition pointer-events-none">
+                  <GripVertical className="w-3 h-3" />
+                  <span className="text-[9px] font-bold">Drag</span>
+                </div>
+
+                {/* "Moving" pill on the dragged card */}
+                {isDragging && (
+                  <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex justify-center pointer-events-none">
+                    <span className="px-2 py-0.5 bg-red-500 text-white text-[9px] font-black uppercase tracking-wider rounded-full shadow pf-anim-slide-down">
+                      Moving…
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
 
           {/* Add more tile */}
           <button
@@ -781,7 +844,6 @@ function ReviewView({
         </div>
       </div>
 
-      {/* Controls */}
       <div className="shrink-0 bg-white border-t border-slate-200 p-4 space-y-3">
         <div>
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
@@ -802,7 +864,7 @@ function ReviewView({
                 <p className={`text-[11px] font-black ${quality.id === q.id ? 'text-red-700' : 'text-slate-700'}`}>
                   {q.label}
                 </p>
-                <p className="text-[9px] text-slate-500 mt-0.5">~{Math.round(q.maxPx / 100) * 100} px</p>
+                <p className="text-[9px] text-slate-500 mt-0.5">~{q.maxPx} px</p>
               </button>
             ))}
           </div>
@@ -842,13 +904,12 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
   const camera = useCamera();
   const fileInputRef = useRef(null);
 
-  const [phase, setPhase] = useState('capture');    // 'capture' | 'edit' | 'review' | 'done'
+  const [phase, setPhase] = useState('capture');
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
   const [captureFlash, setCaptureFlash] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Editing state
   const [sourceCanvas, setSourceCanvas] = useState(null);
   const [corners, setCorners] = useState([]);
   const [enhancement, setEnhancement] = useState('color');
@@ -858,28 +919,23 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
   const [detectionRan, setDetectionRan] = useState(false);
   const [detectionFailed, setDetectionFailed] = useState(false);
 
-  // Pages
   const [pages, setPages] = useState([]);
-  const [quality, setQuality] = useState(QUALITY_PRESETS[1]); // Balanced
+  const [quality, setQuality] = useState(QUALITY_PRESETS[1]);
 
-  // Result
   const [result, setResult] = useState(null);
   const [isBuilding, setIsBuilding] = useState(false);
 
-  // ---- Auto-start camera on mount ----
   useEffect(() => {
     camera.start('environment');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- Stop camera when leaving the capture phase ----
   useEffect(() => {
     if (phase !== 'capture' && camera.active) {
       camera.stop();
     }
   }, [phase, camera]);
 
-  // ---- Capture ----
   const handleCapture = useCallback(() => {
     const video = camera.videoRef.current;
     if (!video) return;
@@ -896,14 +952,11 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
     canvas.height = h;
     canvas.getContext('2d').drawImage(video, 0, 0);
 
-    // Flash feedback
     setCaptureFlash(true);
     setTimeout(() => setCaptureFlash(false), 160);
 
-    // Haptic feedback
     try { if (navigator.vibrate) navigator.vibrate(12); } catch { /* ignore */ }
 
-    // Default corners: the four corners of the image inset by 6%
     const inset = 0.06;
     const defaultCorners = [
       { x: w * inset, y: h * inset },
@@ -918,7 +971,6 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
     setDetectionFailed(false);
     setPhase('edit');
 
-    // Kick off auto-detection in the background
     detectDocumentCorners(canvas).then((detected) => {
       setDetectionRan(true);
       if (detected && detected.length === 4) {
@@ -929,13 +981,11 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
     });
   }, [camera.videoRef]);
 
-  // ---- Import from gallery ----
   const handlePickFile = (e) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
     e.target.value = '';
 
-    // Take the first file only (users can import one at a time for corner adjustment)
     const file = files[0];
     if (!file.type.startsWith('image/')) {
       setErrorMsg('Please select an image file.');
@@ -943,7 +993,7 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
     }
 
     const reader = new FileReader();
-    reader.onload = async (ev) => {
+    reader.onload = (ev) => {
       const img = new Image();
       img.onload = async () => {
         const canvas = document.createElement('canvas');
@@ -965,7 +1015,6 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
         setDetectionFailed(false);
         setPhase('edit');
 
-        // Auto-detect for imported images too
         detectDocumentCorners(canvas).then((detected) => {
           setDetectionRan(true);
           if (detected && detected.length === 4) {
@@ -981,7 +1030,6 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
     reader.readAsDataURL(file);
   };
 
-  // ---- Apply edit — process and add to pages ----
   const handleApplyEdit = async () => {
     if (!sourceCanvas || corners.length !== 4) return;
     setIsProcessing(true);
@@ -989,8 +1037,6 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
     try {
       const warped = await warpPerspective(sourceCanvas, corners);
       const enhanced = enhanceImage(warped, enhancement, brightness, contrast);
-
-      // Thumbnail for the review grid
       const thumb = downsampleCanvas(enhanced, 400);
 
       const id = `page-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -1004,16 +1050,11 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
       };
 
       setPages((prev) => [...prev, newPage]);
-
-      // Clear editing state
       setSourceCanvas(null);
       setCorners([]);
       setPhase('review');
 
-      // Restart the camera for the next scan
-      setTimeout(() => {
-        camera.start(camera.facingMode);
-      }, 100);
+      setTimeout(() => camera.start(camera.facingMode), 100);
     } catch (err) {
       console.error(err);
       setErrorMsg('Failed to process the page.');
@@ -1022,7 +1063,6 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
     }
   };
 
-  // ---- Edit view cancel ----
   const handleCancelEdit = () => {
     setSourceCanvas(null);
     setCorners([]);
@@ -1032,7 +1072,6 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
     setTimeout(() => camera.start(camera.facingMode), 100);
   };
 
-  // ---- Reorder pages ----
   const handleReorder = (from, to) => {
     setPages((prev) => {
       const next = [...prev];
@@ -1051,7 +1090,6 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
     setTimeout(() => camera.start(camera.facingMode), 100);
   };
 
-  // ---- Generate PDF ----
   const handleGenerate = async () => {
     if (pages.length === 0) return;
     setIsBuilding(true);
@@ -1099,9 +1137,7 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
     return `${(bytes / (k * k)).toFixed(2)} MB`;
   };
 
-  // =========================================================================
   // DONE SCREEN
-  // =========================================================================
   if (phase === 'done' && result) {
     return (
       <div className="bg-slate-50 min-h-screen flex flex-col">
@@ -1163,9 +1199,6 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
     );
   }
 
-  // =========================================================================
-  // MAIN STUDIO
-  // =========================================================================
   return (
     <div className="bg-slate-50 h-screen flex flex-col overflow-hidden">
       <input
@@ -1179,7 +1212,6 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
 
       {showInfoModal && <InfoModal onClose={() => setShowInfoModal(false)} />}
 
-      {/* HEADER */}
       <header className="shrink-0 bg-white/90 backdrop-blur-md border-b border-slate-200 z-30">
         <div className="max-w-[1100px] mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
           <button
@@ -1187,7 +1219,7 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
             className="flex items-center space-x-1.5 text-slate-600 hover:text-slate-900 font-semibold text-xs sm:text-sm px-2 sm:px-2.5 py-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer shrink-0"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span className="hidden xs:inline">Back</span>
+            <span className="xs:inline">Back to Home</span>
           </button>
 
           <div className="flex items-center space-x-2 min-w-0 flex-1 justify-center">
@@ -1235,7 +1267,6 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
         </div>
       </header>
 
-      {/* ERROR BANNER */}
       {errorMsg && (
         <div className="shrink-0 px-3 sm:px-4 pt-2">
           <div className="max-w-[1100px] mx-auto p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-900 flex items-start gap-2.5 pf-anim-slide-down">
@@ -1252,7 +1283,6 @@ export default function ScanPdfStudio({ tool, file, onBack }) {
         </div>
       )}
 
-      {/* BODY */}
       <main className="flex-1 min-h-0 relative">
         {phase === 'capture' && (
           <CameraView
