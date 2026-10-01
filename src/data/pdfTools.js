@@ -43,7 +43,7 @@ export const PDF_CATEGORIES = [
       { id: 'remove', name: 'Remove pages', desc: 'Delete unwanted pages from your document.', icon: Trash2, color: 'text-red-500', bg: 'bg-red-50' },
       { id: 'extract', name: 'Extract pages', desc: 'Pull specific pages into a new PDF.', icon: FolderInput, color: 'text-amber-500', bg: 'bg-amber-50' },
       { id: 'organize', name: 'Organize PDF', desc: 'Sort, reorder, and rotate document pages.', icon: FolderSync, color: 'text-amber-600', bg: 'bg-amber-50' },
-      { id: 'scan', name: 'Scan to PDF', desc: 'Capture documents directly via camera/scanner.', icon: Scan, color: 'text-red-600', bg: 'bg-red-50', inactive: true, badge: 'Coming Soon' },
+      { id: 'scan', name: 'Scan to PDF', desc: 'Capture documents directly via camera/scanner.', icon: Scan, color: 'text-red-600', bg: 'bg-red-50', directLaunch: true },
     ],
   },
   {

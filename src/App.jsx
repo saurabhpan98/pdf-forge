@@ -222,6 +222,21 @@ export default function App() {
       setShowMobileBlock(true);
       return;
     }
+
+    // Tools flagged `directLaunch` skip the upload modal entirely — they
+    // either don't need a file (Scan to PDF) or acquire it themselves.
+    if (tool.directLaunch) {
+      setActiveStudioSession({
+        tool,
+        files: [],
+        imageCards: [],
+        htmlCode: '',
+        htmlMode: 'file',
+      });
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     setActiveModalTool(tool);
   };
 

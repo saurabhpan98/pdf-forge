@@ -2909,3 +2909,78 @@ export async function analyzePdfForWord(file) {
 
   return await response.json();
 }
+
+/* =========================================================================
+ *  BUILD SCANNED PDF
+ *
+ *  Assembles an array of scanned pages into a single PDF. Each page is
+ *  a canvas already warped and enhanced by the Scan to PDF studio.
+ *
+ *  Pages are embedded as JPEG at the user-selected quality. Page
+ *  dimensions match the corresponding image dimensions — no letterbox
+ *  margins, no artificial page sizes. This is the fit-to-image model
+ *  that scanned documents need.
+ * ========================================================================= */
+export async function buildScannedPdf(pages, options = {}) {
+  if (!Array.isArray(pages) || pages.length === 0) {
+    throw new Error('No pages to assemble.');
+  }
+
+  const quality = Math.max(0.5, Math.min(0.98, options.quality || 0.85));
+  const maxPx = Math.max(1000, Math.min(4000, options.maxPx || 2000));
+
+  const pdfDoc = await PDFDocument.create();
+
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+    let canvas = page.processedCanvas || page.canvas;
+    if (!canvas) continue;
+
+    // Downsample large images for size control
+    let working = canvas;
+    const longest = Math.max(canvas.width, canvas.height);
+    if (longest > maxPx) {
+      const scale = maxPx / longest;
+      const tmp = document.createElement('canvas');
+      tmp.width = Math.round(canvas.width * scale);
+      tmp.height = Math.round(canvas.height * scale);
+      const tctx = tmp.getContext('2d');
+      tctx.imageSmoothingEnabled = true;
+      tctx.imageSmoothingQuality = 'high';
+      tctx.drawImage(canvas, 0, 0, tmp.width, tmp.height);
+      working = tmp;
+    }
+
+    // Convert to JPEG bytes
+    const dataUrl = working.toDataURL('image/jpeg', quality);
+    const base64 = dataUrl.split(',')[1];
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let b = 0; b < binary.length; b++) bytes[b] = binary.charCodeAt(b);
+
+    const img = await pdfDoc.embedJpg(bytes);
+
+    // PDF points: 1 inch = 72 pt. Use 200 DPI as an approximation.
+    const dpi = 200;
+    const pdfW = (working.width / dpi) * 72;
+    const pdfH = (working.height / dpi) * 72;
+
+    const pdfPage = pdfDoc.addPage([pdfW, pdfH]);
+    pdfPage.drawImage(img, {
+      x: 0,
+      y: 0,
+      width: pdfW,
+      height: pdfH,
+    });
+  }
+
+  const pdfBytes = await pdfDoc.save({ useObjectStreams: true });
+  const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+
+  return {
+    blob: new Blob([pdfBytes], { type: 'application/pdf' }),
+    filename: `scanned_document_${timestamp}.pdf`,
+    pageCount: pages.length,
+    compressedSize: pdfBytes.byteLength,
+  };
+}

@@ -103,6 +103,7 @@ import WordToPdfStudio from './WordToPdfStudio';
 import PdfToWordStudio from './PdfToWordStudio';
 import PdfToPowerpointStudio from './PdfToPowerpointStudio';
 import PdfToExcelStudio from './PdfToExcelStudio';
+import ScanPdfStudio from './ScanPdfStudio';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
   const [files, setFiles] = useState(initialFiles || []);
@@ -1792,6 +1793,17 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   if (tool?.id === 'pdf-to-excel') {
     return (
       <PdfToExcelStudio
+        tool={tool}
+        file={files[0]}
+        onBack={onBack}
+      />
+    );
+  }
+
+  // --- Scan to PDF ---
+  if (tool?.id === 'scan') {
+    return (
+      <ScanPdfStudio
         tool={tool}
         file={files[0]}
         onBack={onBack}
