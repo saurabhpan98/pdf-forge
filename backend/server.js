@@ -62,6 +62,16 @@ app.use(cors({
     'x-conversion-engine',
     'x-conversion-enhanced',
     'x-converted-size',
+    // PDF to PowerPoint
+    'x-ppt-mode',
+    'x-slide-count',
+    'x-text-boxes',
+    'x-image-count',
+    // PDF to Excel
+    'x-excel-mode',
+    'x-table-count',
+    'x-row-count',
+    'x-sheet-count',
   ],
 }));
 
@@ -1029,7 +1039,7 @@ app.post('/api/convert/pdf-to-word', upload.single('file'), async (req, res) => 
   }
 });
 
-// PDF to PowerPoint (.pptx)
+// PDF to PowerPoint (.pptx) — image mode or text mode
 app.post('/api/convert/pdf-to-powerpoint', upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No PDF file uploaded.' });
@@ -1038,43 +1048,56 @@ app.post('/api/convert/pdf-to-powerpoint', upload.single('file'), async (req, re
   const tempId = `pdf2ppt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   const tempDir = path.join(os.tmpdir(), tempId);
   const inputPdfPath = path.join(tempDir, 'input.pdf');
-  const outputPptxPath = path.join(tempDir, 'input.pptx');
+  const outputPptxPath = path.join(tempDir, 'output.pptx');
+  const payloadPath = path.join(tempDir, 'payload.json');
+  const pythonScriptPath = path.join(__dirname, 'convert_pdf2pptx.py');
 
   try {
     await fs.mkdir(tempDir, { recursive: true });
     await fs.writeFile(inputPdfPath, req.file.buffer);
 
-    // Run LibreOffice with impress_pdf_import filter
-    await new Promise((resolve, reject) => {
-      const lo = spawn('libreoffice', [
-        '--headless',
-        '--invisible',
-        '--nocrashreport',
-        '--nodefault',
-        '--nofirststartwizard',
-        '--infilter=impress_pdf_import',
-        '--convert-to',
-        'pptx',
-        '--outdir',
-        tempDir,
-        conversionInputPath,
+    const mode = req.body.mode === 'text' ? 'text' : 'image';
+    const options = {
+      mode,
+      dpi: parseInt(req.body.dpi || '150', 10),
+      quality: parseInt(req.body.quality || '85', 10),
+      minFontSize: parseFloat(req.body.minFontSize || '4'),
+      minBlockArea: parseFloat(req.body.minBlockArea || '20'),
+    };
+    await fs.writeFile(payloadPath, JSON.stringify(options), 'utf-8');
+
+    let stdout = '';
+    let stderr = '';
+
+    const exitCode = await new Promise((resolve) => {
+      const py = spawn('python3', [
+        pythonScriptPath,
+        inputPdfPath,
+        outputPptxPath,
+        payloadPath,
       ]);
-
-      let stderr = '';
-      lo.stderr.on('data', (data) => {
-        stderr += data.toString();
+      py.stdout.on('data', (d) => { stdout += d.toString(); });
+      py.stderr.on('data', (d) => {
+        const s = d.toString();
+        stderr += s;
+        process.stderr.write(`[py-pdf2ppt] ${s}`);
       });
-
-      lo.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`LibreOffice exited with code ${code}. Error: ${stderr}`));
-        }
-      });
-
-      lo.on('error', (err) => reject(err));
+      py.on('close', (code) => resolve(code));
+      py.on('error', () => resolve(-1));
     });
+
+    let report = { success: false };
+    const line = stdout.split('\n').reverse().find((l) => l.startsWith('__RESULT__'));
+    if (line) {
+      try { report = JSON.parse(line.slice('__RESULT__'.length)); }
+      catch (e) { console.warn('PPTX result parse failed:', e.message); }
+    }
+
+    if (exitCode !== 0 || !report.success) {
+      return res.status(500).json({
+        error: 'Failed to convert PDF to PowerPoint. The PDF may be corrupted or use an unsupported layout.',
+      });
+    }
 
     const pptxBuffer = await fs.readFile(outputPptxPath);
     const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
@@ -1084,6 +1107,13 @@ app.post('/api/convert/pdf-to-powerpoint', upload.single('file'), async (req, re
       'application/vnd.openxmlformats-officedocument.presentationml.presentation'
     );
     res.setHeader('Content-Disposition', `attachment; filename="${originalName}.pptx"`);
+    res.setHeader('x-original-size', req.file.size.toString());
+    res.setHeader('x-converted-size', pptxBuffer.length.toString());
+    res.setHeader('x-ppt-mode', report.mode || 'image');
+    res.setHeader('x-slide-count', String(report.slides || 0));
+    res.setHeader('x-text-boxes', String(report.textBoxes || 0));
+    res.setHeader('x-image-count', String(report.images || 0));
+
     return res.send(pptxBuffer);
   } catch (error) {
     console.error('PDF to PowerPoint conversion error:', error);
@@ -1093,7 +1123,7 @@ app.post('/api/convert/pdf-to-powerpoint', upload.single('file'), async (req, re
   }
 });
 
-// PDF to Excel (.xlsx) using Python openpyxl engine
+// PDF to Excel (.xlsx) using the rewritten high-fidelity engine
 app.post('/api/convert/pdf-to-excel', upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No PDF file uploaded.' });
@@ -1103,30 +1133,54 @@ app.post('/api/convert/pdf-to-excel', upload.single('file'), async (req, res) =>
   const tempDir = path.join(os.tmpdir(), tempId);
   const inputPdfPath = path.join(tempDir, 'input.pdf');
   const outputXlsxPath = path.join(tempDir, 'output.xlsx');
+  const payloadPath = path.join(tempDir, 'payload.json');
   const pythonScriptPath = path.join(__dirname, 'convert_pdf2excel.py');
 
   try {
     await fs.mkdir(tempDir, { recursive: true });
     await fs.writeFile(inputPdfPath, req.file.buffer);
 
-    await new Promise((resolve, reject) => {
-      const py = spawn('python3', [pythonScriptPath, inputPdfPath, outputXlsxPath]);
+    const mode = ['tables', 'mixed', 'text'].includes(req.body.mode)
+      ? req.body.mode
+      : 'tables';
+    await fs.writeFile(
+      payloadPath,
+      JSON.stringify({ mode }),
+      'utf-8'
+    );
 
-      let stderr = '';
-      py.stderr.on('data', (data) => {
-        stderr += data.toString();
+    let stdout = '';
+    let stderr = '';
+
+    const exitCode = await new Promise((resolve) => {
+      const py = spawn('python3', [
+        pythonScriptPath,
+        inputPdfPath,
+        outputXlsxPath,
+        payloadPath,
+      ]);
+      py.stdout.on('data', (d) => { stdout += d.toString(); });
+      py.stderr.on('data', (d) => {
+        const s = d.toString();
+        stderr += s;
+        process.stderr.write(`[py-pdf2excel] ${s}`);
       });
-
-      py.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`convert_pdf2excel failed with code ${code}: ${stderr}`));
-        }
-      });
-
-      py.on('error', (err) => reject(err));
+      py.on('close', (code) => resolve(code));
+      py.on('error', () => resolve(-1));
     });
+
+    let report = { success: false };
+    const line = stdout.split('\n').reverse().find((l) => l.startsWith('__RESULT__'));
+    if (line) {
+      try { report = JSON.parse(line.slice('__RESULT__'.length)); }
+      catch (e) { console.warn('XLSX result parse failed:', e.message); }
+    }
+
+    if (exitCode !== 0 || !report.success) {
+      return res.status(500).json({
+        error: 'Failed to convert PDF to Excel. The PDF may not contain extractable tables.',
+      });
+    }
 
     const xlsxBuffer = await fs.readFile(outputXlsxPath);
     const originalName = req.file.originalname.replace(/\.[^/.]+$/, '');
@@ -1136,6 +1190,13 @@ app.post('/api/convert/pdf-to-excel', upload.single('file'), async (req, res) =>
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     );
     res.setHeader('Content-Disposition', `attachment; filename="${originalName}.xlsx"`);
+    res.setHeader('x-original-size', req.file.size.toString());
+    res.setHeader('x-converted-size', xlsxBuffer.length.toString());
+    res.setHeader('x-excel-mode', report.mode || 'tables');
+    res.setHeader('x-table-count', String(report.tables || 0));
+    res.setHeader('x-row-count', String(report.rows || 0));
+    res.setHeader('x-sheet-count', String(report.sheets || 0));
+
     return res.send(xlsxBuffer);
   } catch (error) {
     console.error('PDF to Excel conversion error:', error);

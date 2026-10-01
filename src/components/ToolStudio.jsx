@@ -101,6 +101,8 @@ import CompressPdfStudio from './CompressPdfStudio';
 import RepairPdfStudio from './RepairPdfStudio';
 import WordToPdfStudio from './WordToPdfStudio';
 import PdfToWordStudio from './PdfToWordStudio';
+import PdfToPowerpointStudio from './PdfToPowerpointStudio';
+import PdfToExcelStudio from './PdfToExcelStudio';
 
 export default function ToolStudio({ tool, initialFiles, initialImageCards, initialHtmlCode, initialHtmlMode, onBack }) {
   const [files, setFiles] = useState(initialFiles || []);
@@ -1768,6 +1770,28 @@ export default function ToolStudio({ tool, initialFiles, initialImageCards, init
   if (tool?.id === 'pdf-to-word') {
     return (
       <PdfToWordStudio
+        tool={tool}
+        file={files[0]}
+        onBack={onBack}
+      />
+    );
+  }
+
+  // --- PDF to PowerPoint ---
+  if (tool?.id === 'pdf-to-powerpoint') {
+    return (
+      <PdfToPowerpointStudio
+        tool={tool}
+        file={files[0]}
+        onBack={onBack}
+      />
+    );
+  }
+
+  // --- PDF to Excel ---
+  if (tool?.id === 'pdf-to-excel') {
+    return (
+      <PdfToExcelStudio
         tool={tool}
         file={files[0]}
         onBack={onBack}

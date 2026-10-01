@@ -69,8 +69,8 @@ export const PDF_CATEGORIES = [
     tools: [
       { id: 'pdf-to-jpg', name: 'PDF to JPG', desc: 'Extract pages as high-resolution images.', icon: Image, color: 'text-yellow-600', bg: 'bg-yellow-50' },
       { id: 'pdf-to-word', name: 'PDF to WORD', desc: 'Convert PDFs to editable Word documents.', icon: FileText, color: 'text-blue-600', bg: 'bg-blue-50' },
-      { id: 'pdf-to-powerpoint', name: 'PDF to POWERPOINT', desc: 'Convert PDF files into PPTX slides.', icon: Presentation, color: 'text-orange-600', bg: 'bg-orange-50', badge: 'Not Accurate' },
-      { id: 'pdf-to-excel', name: 'PDF to EXCEL', desc: 'Pull structured data straight into Excel sheets.', icon: FileSpreadsheet, color: 'text-green-600', bg: 'bg-green-50', badge: 'Not Accurate' },
+      { id: 'pdf-to-powerpoint', name: 'PDF to POWERPOINT', desc: 'Convert PDF files into PPTX slides.', icon: Presentation, color: 'text-orange-600', bg: 'bg-orange-50' },
+      { id: 'pdf-to-excel', name: 'PDF to EXCEL', desc: 'Pull structured data straight into Excel sheets.', icon: FileSpreadsheet, color: 'text-green-600', bg: 'bg-green-50' },
       { id: 'pdf-to-pdfa', name: 'PDF to PDF/A', desc: 'Convert to ISO-compliant archive formats.', icon: FileCheck, color: 'text-slate-600', bg: 'bg-slate-50' },
     ],
   },

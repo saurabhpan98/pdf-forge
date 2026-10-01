@@ -548,7 +548,7 @@ export default function PdfToWordStudio({ tool, file, onBack }) {
             className="flex items-center space-x-1.5 text-slate-600 hover:text-slate-900 font-semibold text-xs sm:text-sm px-2 sm:px-2.5 py-1.5 rounded-xl hover:bg-slate-100 transition cursor-pointer shrink-0"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span className="sm:inline">Back to Home</span>
+            <span className="hidden sm:inline">Back to Home</span>
           </button>
 
           <div className="flex items-center space-x-2 min-w-0 flex-1 justify-center">

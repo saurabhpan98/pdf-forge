@@ -1042,7 +1042,7 @@ export async function convertPdfToWord(file) {
   };
 }
 
-export async function convertPdfToPowerpoint(file) {
+export async function convertPdfToPowerpoint(file, options = {}) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
     const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
@@ -1050,9 +1050,16 @@ export async function convertPdfToPowerpoint(file) {
     throw err;
   }
 
+  const mode = options.mode === 'text' ? 'text' : 'image';
+
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('mode', mode);
+  if (options.dpi) formData.append('dpi', String(options.dpi));
+  if (options.quality) formData.append('quality', String(options.quality));
+  if (options.minFontSize) formData.append('minFontSize', String(options.minFontSize));
 
+  //const response = await fetch('/api/convert/pdf-to-powerpoint', {
   const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-powerpoint`, {
     method: 'POST',
     body: formData,
@@ -1069,12 +1076,16 @@ export async function convertPdfToPowerpoint(file) {
   return {
     blob: pptxBlob,
     filename: `${baseName}.pptx`,
-    originalSize: file.size,
-    compressedSize: pptxBlob.size,
+    originalSize: parseInt(response.headers.get('x-original-size') || '0', 10) || file.size,
+    compressedSize: parseInt(response.headers.get('x-converted-size') || '0', 10) || pptxBlob.size,
+    mode: response.headers.get('x-ppt-mode') || mode,
+    slideCount: parseInt(response.headers.get('x-slide-count') || '0', 10) || 0,
+    textBoxes: parseInt(response.headers.get('x-text-boxes') || '0', 10) || 0,
+    imageCount: parseInt(response.headers.get('x-image-count') || '0', 10) || 0,
   };
 }
 
-export async function convertPdfToExcel(file) {
+export async function convertPdfToExcel(file, options = {}) {
   const isLocked = await checkPdfPassword(file);
   if (isLocked) {
     const err = new Error(`Cannot process: "${file.name}" is password-protected.`);
@@ -1082,10 +1093,14 @@ export async function convertPdfToExcel(file) {
     throw err;
   }
 
+  const mode = ['tables', 'mixed', 'text'].includes(options.mode) ? options.mode : 'tables';
+
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('mode', mode);
 
   const response = await fetch(`${API_BASE_URL}/api/convert/pdf-to-excel`, {
+  //const response = await fetch('/api/convert/pdf-to-excel', {
     method: 'POST',
     body: formData,
   });
@@ -1101,8 +1116,12 @@ export async function convertPdfToExcel(file) {
   return {
     blob: xlsxBlob,
     filename: `${baseName}.xlsx`,
-    originalSize: file.size,
-    compressedSize: xlsxBlob.size,
+    originalSize: parseInt(response.headers.get('x-original-size') || '0', 10) || file.size,
+    compressedSize: parseInt(response.headers.get('x-converted-size') || '0', 10) || xlsxBlob.size,
+    mode: response.headers.get('x-excel-mode') || mode,
+    tableCount: parseInt(response.headers.get('x-table-count') || '0', 10) || 0,
+    rowCount: parseInt(response.headers.get('x-row-count') || '0', 10) || 0,
+    sheetCount: parseInt(response.headers.get('x-sheet-count') || '0', 10) || 0,
   };
 }
 

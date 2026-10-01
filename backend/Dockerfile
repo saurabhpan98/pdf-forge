@@ -212,7 +212,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     python-docx \
     pdfplumber \
     openpyxl \
-    pikepdf \
+     pikepdf \
+    python-pptx \
     opencv-python-headless \
     pdf2docx \
     lxml
