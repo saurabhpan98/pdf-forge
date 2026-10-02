@@ -28,7 +28,7 @@ const FAQS = [
   },
   {
     q: 'Does it work on mobile?',
-    a: 'Most tools work fully on mobile. The advanced "Edit PDF Text" tool is desktop-only because it requires precise mouse input and a wide sidebar. You can still edit PDFs by adding text, shapes, and signatures using the touch-friendly "Edit PDF" tool.',
+    a: 'Most tools work fully on mobile. Two are worth calling out. "Edit PDF Text" is desktop-only because it requires precise mouse input and a wide sidebar — use the touch-friendly "Edit PDF" tool instead. "Scan to PDF" is the opposite: it is designed for mobile first and works best on a phone, where you can point the rear camera at a document, let the tool auto-detect the edges, and capture multi-page PDFs on the spot.',
   },
   {
     q: 'What makes PDF Forge different from other PDF sites?',

@@ -20,7 +20,7 @@
 * **Remove Pages** : Remove pages just by selecting or defining the range
 * **Extract Pages** : Extract specific page or range of pages from a PDF 
 * **Organize PDF** : Drag-and-drop page reordering with individual page rotation.
-* **Scan to PDF** : Directly scan a page from your phone to capture and convert it into PDF
+* **Scan to PDF** : Turn your phone or laptop into a document scanner. Capture pages with the camera (or import images from disk), let OpenCV auto-detect the page edges, then drag the corners if the detection is off. Apply **Color**, **Grayscale**, or **Black & White** enhancement with brightness / contrast / saturation sliders and a live preview thumbnail. Capture as many pages as you need, drag to reorder them, and export a single multi-page PDF. Runs entirely in your browser — no upload, no server round-trip.
 
 ### Convert to PDF 
 * **Compress PDF** : Two compression algorithms with a monotonic guarantee (never returns a larger file). **Smart Compress** keeps text selectable while recompressing images, subsetting fonts, and stripping metadata via Ghostscript. **Deep Compress** rasterizes pages to JPEG at a target DPI via PyMuPDF for maximum savings on scans and photo-heavy documents. Four presets (Light / Balanced / Aggressive / Extreme), plus a custom panel with DPI (50–300), JPEG quality (10–95), grayscale conversion, and per-feature toggles. Live size estimate updates as you adjust settings.
@@ -65,6 +65,23 @@
 
 **AI tools run fully in-browser** via WebAssembly and (where available) WebGPU. No API keys, no server round-trip, no rate limits. Models download once and are cached locally — you can clear them any time from the storage icon in each AI tool's header.
 
+### How Scan to PDF works
+
+The scanner has four stages, all client-side:
+
+1. **Capture** — `getUserMedia` streams the rear camera (`facingMode: 'environment'`) into a `<video>` element with a live 3×3 framing grid. On desktop, or when you want to bring in an existing photo, the same stage accepts `image/*` files from disk. A light flash animation confirms every shutter press and the device vibrates briefly on supporting hardware.
+
+2. **Corner detection** — the captured frame is downscaled to 800 px on its longest edge and handed to OpenCV.js, which runs Gaussian blur → Canny edge detection → dilation → `findContours` → `approxPolyDP`. The largest 4-vertex polygon whose area covers at least 15% of the frame wins. Its corners are scaled back up and sorted top-left → top-right → bottom-right → bottom-left. If OpenCV cannot load (offline, CDN blocked) the tool falls back to a simple bounding-box crop so scanning always works — the quality is just slightly lower on skewed pages.
+
+3. **Adjust & enhance** — four draggable handles sit on the detected corners. Pull any of them to fix a bad detection. Behind the scenes, a 180 ms debounced pipeline re-runs `warpPerspective` (true 4-point perspective transform when OpenCV is available) and applies your chosen enhancement filter to a small preview thumbnail that updates live. Enhancement options:
+   - **Color** — full colour with brightness (50–180), contrast (60–200), and saturation (0–200) sliders.
+   - **Grayscale** — desaturates fully, removing paper tint. Ideal for receipts and forms.
+   - **Black & White** — grayscale first, then an adaptive local-mean threshold via an integral image (`W = 15`, `C = 8`). Produces crisp text on unevenly lit pages where a global threshold would fail.
+
+4. **Assemble** — captured pages appear as a 2×3 grid of thumbnails. Drag to reorder (HTML5 DnD on desktop, a 250 ms long-press drag on touch devices — the same long-press pattern used by Organize PDF and Merge PDF). Pick one of three output quality presets — *Small file* (~65%, 1400 px), *Balanced* (~82%, 2000 px), or *High detail* (~94%, 3000 px) — and pdf-lib stitches everything into a single PDF with each page sized to its image aspect ratio (fit-to-image, no letterbox margins).
+
+**Tips for the best result:** use a high-contrast background (a dark table works well), light the page evenly to avoid hard shadows, and hold the camera directly above the document for the flattest perspective. Black & White mode gives the crispest text but loses any colour markup like red stamps or signature ink.
+
 ---
 
 ## 🛠 Tech Stack
@@ -77,6 +94,7 @@
 * **Signature:** ```react-signature-canvas```
 * **Image cropping:** ```react-image-crop```
 * **OCR (client-side):** ```tesseract.js```
+* **Document scanning:** OpenCV.js (lazy-loaded from CDN, cached by the browser) — edge detection, contour analysis, and perspective warp for the Scan to PDF tool
 * **Archives:** ```jszip```
 * **On-device AI:** `@huggingface/transformers` (Transformers.js) — WebGPU accelerated with WASM fallback
 *-* **AI models used:** `Xenova/distilbart-cnn-12-6` (summarization), `Xenova/nllb-200-distilled-600M` + per-language `Xenova/opus-mt-*` (translation)
@@ -145,6 +163,7 @@
 │   │   ├── RepairPdfStudio.jsx     # Multi-tier PDF recovery UI with health diagnostics
 │   │   ├── Reviews.jsx             # Testimonial carousel
 │   │   ├── SignPdfStudio.jsx       # Signature placement editor
+│   │   ├── ScanPdfStudio.jsx       # Camera capture → corner adjust → enhance → multi-page PDF
 │   │   ├── TextFormatSidebar.jsx   # Font / color / spacing / alignment controls
 │   │   ├── ToolCard.jsx            # Interactive tool card with hover animations
 │   │   ├── ToolModal.jsx           # Upload & security-verification modal
@@ -153,9 +172,11 @@
 |   ├── data/
 |   │   └── pdfTools.jsx         # all pdf tools entry
 │   ├── hooks/
+│   │   ├── useCamera.js            # getUserMedia lifecycle for Scan to PDF
 │   │   └── useAIWorker.js          # Web Worker bridge for AI tasks
 │   ├── utils/
 │   │   ├── aiCacheManager.js       # Cache API stats + clearing for AI models
+│   │   ├── documentScanner.js      # OpenCV.js loader, corner detection, warp, enhancement
 │   │   ├── pageOcrReader.js        # Tesseract-based OCR helper (upscale + contrast)
 │   │   └── pdfWorker.js         # Client-side processing & backend API client
 │   ├── workers/
@@ -360,7 +381,9 @@ PDF Forge is built around a simple promise: your documents remain yours.
 * Valid OpenXML Generation: Document models are synthesized strictly within Microsoft OpenXML standards to eliminate corrupt file warnings.
 
 ### Client-side processing (default for most tools)
-Merge, split, rotate, watermark, page numbers, crop, compress, sign, forms, and OCR all run entirely inside the browser using WebAssembly and JavaScript. Your file never leaves your device.
+Merge, split, rotate, watermark, page numbers, crop, compress, sign, forms, OCR, and Scan to PDF all run entirely inside the browser using WebAssembly, the Canvas API, and JavaScript. Your file never leaves your device.
+
+Scan to PDF is fully self-contained: the camera stream is read through `getUserMedia`, page boundaries are detected with OpenCV.js (WASM), perspective correction is a canvas warp, enhancement is canvas 2D image processing, and the final PDF is assembled with pdf-lib. Nothing — not the images, not the corners, not the metadata — is sent anywhere.
 
 ### Server-side processing (only when a real engine is required)
 Office conversions, PDF/A, and in-place text editing run on the backend. These paths are stateless:
@@ -396,6 +419,10 @@ Our implementation calls PyMuPDF's `add_redact_annot()` and `apply_redactions()`
 
 To verify: run `pdftotext` on the output and search for the redacted content. It will return nothing. Files are processed in-memory on the server and discarded the moment the download finishes — same ephemeral model as every other server-side tool.
 
+### The scanner is 100% client-side too
+
+The **Scan to PDF** tool captures from your camera, detects page boundaries, applies enhancement, and builds the final PDF entirely in your browser. The camera stream is read locally through `getUserMedia` and never transmitted — the tool does not even have a backend endpoint to send it to. OpenCV.js runs as WebAssembly on your device, the perspective warp is a canvas operation, and the PDF is assembled with pdf-lib. If you are offline, everything still works.
+
 ### Additional guarantees
 * **No database.** There is nothing persistent to leak.
 * **No analytics.** No fingerprinting, no ads, no third-party tracking.
@@ -426,13 +453,11 @@ The server installs a broad font set (Liberation, Carlito, Caladea, Noto, DejaVu
 
 
 ## 🗺 Roadmap
-* Repair PDF (recover corrupted files)
-* Redact PDF (permanent blackout)
+* Repair PDF (Polish it)
 * Compare PDF (visual + text diff)
 * Sign PDF with X.509 / PKCS#7 cryptographic signatures
 * AI Summarizer (local + cloud LLM options)
-* Translate PDF
-* Scan to PDF (camera capture)
+* Translate PDF (polish it)
 * Batch processing / presets
 * Desktop app (Tauri / Electron wrapper)
 
